@@ -25,6 +25,8 @@ namespace Crystal_Caverns.Model
         private Camera _camera;
         private SizeF _worldSize = new SizeF(3000, 1000);
 
+        private float _lastPlayerDamageTime = 0f;
+        private const float PLAYER_DAMAGE_COOLDOWN = 1.0f;
         public bool IsGameRunning { get; private set; }
         public bool IsGameOver { get; private set; }
         public bool IsVictory { get; private set; }
@@ -122,15 +124,126 @@ namespace Crystal_Caverns.Model
             _gameObjects.Add(_player);
             gameForm.Controls.Add(_player.Sprite);
 
-            CreatePlatforms(gameForm, platformSprite);
+            CreatePlatform(50, 400, 300, 20, null, gameForm);
+            CreatePlatform(400, 450, 200, 20, null, gameForm);
+            CreatePlatform(650, 400, 250, 20, null, gameForm);
 
-            CreateCollectibles(gameForm, crystalSprite);
+            // Добавляем кристаллы в начальной области
+            CreateCollectible(150, 370, 10, null, gameForm);
+            CreateCollectible(450, 420, 10, null, gameForm);
+            CreateCollectible(750, 370, 10, null, gameForm);
 
-            CreateEnemies(gameForm, enemySprite, enemySprite, enemySprite);
+            // Добавляем врага
+            PatrolEnemy enemy1 = new PatrolEnemy(
+                500, 420, _player, 2.0f, 100.0f, null
+            );
+            _gameObjects.Add(enemy1);
+            _enemies.Add(enemy1);
+            gameForm.Controls.Add(enemy1.Sprite);
 
-            _exitDoor = new Door(700, 336, doorClosedSprite, doorOpenSprite);
+            // ----- СЕКЦИЯ 2: ПЕЩЕРА ВПРАВО -----
+            // Продолжаем уровень вправо (+1000 по X)
+            for (int i = 0; i < 8; i++)
+            {
+                float x = 950 + i * 200;
+                float y = 400 + (float)Math.Sin(i * 0.7) * 100;
+
+                CreatePlatform(x, y, 150, 20, null, gameForm);
+
+                // Добавляем кристаллы на некоторые платформы
+                if (i % 2 == 0)
+                {
+                    CreateCollectible(x + 75, y - 30, 10, null, gameForm);
+                }
+
+                // Добавляем врагов на некоторые платформы
+                if (i % 3 == 0)
+                {
+                    ChasingEnemy enemy = new ChasingEnemy(
+                        x + 50, y - 32, _player, 3.0f, 250.0f, null
+                    );
+                    _gameObjects.Add(enemy);
+                    _enemies.Add(enemy);
+                    gameForm.Controls.Add(enemy.Sprite);
+                }
+            }
+
+            // ----- СЕКЦИЯ 3: ПОДЗЕМНАЯ ОБЛАСТЬ -----
+            // Добавляем пещеры вниз (+500 по Y)
+            for (int i = 0; i < 6; i++)
+            {
+                float x = 300 + (float)Math.Sin(i * 0.8) * 400;
+                float y = 550 + i * 100;
+
+                CreatePlatform(x, y, 200, 20, null, gameForm);
+
+                // Добавляем больше ценных кристаллов глубоко внизу
+                CreateCollectible(x + 50, y - 30, 20, null, gameForm);
+                CreateCollectible(x + 150, y - 30, 20, null, gameForm);
+
+                // Добавляем специальный кристалл на самую глубокую платформу
+                if (i == 5)
+                {
+                    CreateSpecialCrystal(x + 100, y - 30, CrystalType.DoubleJump, null, gameForm);
+                }
+            }
+
+            // ----- СЕКЦИЯ 4: ВЫСОКАЯ БАШНЯ -----
+            // Создаем вертикальную секцию слева
+            for (int i = 0; i < 10; i++)
+            {
+                float x = 50 + (i % 2) * 150; // Зигзагообразные платформы
+                float y = 350 - i * 80;
+
+                CreatePlatform(x, y, 120, 20, null, gameForm);
+
+                // Добавляем кристаллы через одну платформу
+                if (i % 2 == 0)
+                {
+                    CreateCollectible(x + 60, y - 30, 10, null, gameForm);
+                }
+
+                // Добавляем летающего врага на вершину
+                if (i == 9)
+                {
+                    FlyingEnemy enemy = new FlyingEnemy(
+                        x + 60, y - 100, _player, 2.5f, 180.0f, 60.0f, null
+                    );
+                    _gameObjects.Add(enemy);
+                    _enemies.Add(enemy);
+                    gameForm.Controls.Add(enemy.Sprite);
+                }
+            }
+
+            // ----- СЕКЦИЯ 5: ПУТЬ К ВЫХОДУ -----
+            // Продолжаем путь далеко вправо для размещения выхода
+            for (int i = 0; i < 5; i++)
+            {
+                float x = 2400 + i * 150;
+                float y = 400 - i * 10; // Небольшой подъем
+
+                CreatePlatform(x, y, 100, 20, null, gameForm);
+            }
+
+            // Создаем дверь в конце уровня
+            _exitDoor = new Door(2900, 330, null);
             _gameObjects.Add(_exitDoor);
             gameForm.Controls.Add(_exitDoor.Sprite);
+
+
+
+
+
+
+            //CreatePlatforms(gameForm, platformSprite);
+
+            //CreateCollectibles(gameForm, crystalSprite);
+
+            //CreateEnemies(gameForm, enemySprite, enemySprite, enemySprite);
+
+            //_exitDoor = new Door(700, 336, doorClosedSprite, doorOpenSprite);
+            //_gameObjects.Add(_exitDoor);
+            //gameForm.Controls.Add(_exitDoor.Sprite);
 
             CollectiblesChanged?.Invoke(this, new CollectiblesEventArgs(CollectedCrystals, TotalCrystals));
         }
@@ -219,7 +332,7 @@ namespace Crystal_Caverns.Model
         public void Update(GameTime gameTime)
         {
             if (!IsGameRunning) return;
-
+            _lastPlayerDamageTime += gameTime.DeltaTime;
             _camera.Update(gameTime);
             
             foreach (var obj in _gameObjects.ToList())
@@ -247,11 +360,22 @@ namespace Crystal_Caverns.Model
                     {
                         _player.OnCollision(obj);
 
-                        if (obj is Enemy)
+                        if (obj is Enemy enemy)
                         {
-                            _player.TakeDamage();
+                            // Проверяем время с последнего урона
+                            if (_lastPlayerDamageTime >= PLAYER_DAMAGE_COOLDOWN)
+                            {
+                                _player.TakeDamage();
+                                _lastPlayerDamageTime = 0f; // Сбрасываем таймер
+
+                                // Отталкиваем игрока от врага
+                                float pushDirection = _player.Position.X < enemy.Position.X ? -1 : 1;
+                                _player.VelocityX = pushDirection * 8f; // Отталкиваем игрока
+                                _player.VelocityY = -5f; // Небольшой подпрыжок
+                            }
                         }
-                        
+
+
                         if (obj is Collectible collectible && !collectible.IsCollected)
                         {
                             bool intersects = _player.Intersects(obj);
@@ -327,8 +451,7 @@ namespace Crystal_Caverns.Model
         {
             if (_player == null) return;
 
-            
-            float fallDeathY = 800; 
+            float fallDeathY = _worldSize.Height + 100; 
 
             if (_player.Position.Y > fallDeathY)
             {
