@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 using Crystal_Caverns.Utils;
 
@@ -225,535 +226,1031 @@ namespace Crystal_Caverns.Model
         }
     }
 
+    public enum EnemyState
+    {
+        Patrolling, Chasing, Jumping, Recovery, Idle
+    }
+
+    public class ChasingEnemySettings
+    {
+        public float ChaseSpeed { get; set; } = 3.0f;
+        public float PatrolSpeed { get; set; } = 1.5f;
+        public float DetectionRange { get; set; } = 300.0f;
+
+        public float JumpStrength { get; set; } = 12.0f;
+        public float JumpSpeedBoost { get; set; } = 2f;
+        public float JumpCooldown { get; set; } = 0.5f;
+
+        public float IdleTime { get; set; } = 1.0f;
+        public float RecoveryTime { get; set; } = 0.5f;
+        public float MemoryDuration { get; set; } = 2.0f;
+        public float IdleProbability { get; set; } = 0.05f;
+    }
+
     public class ChasingEnemy : Enemy
     {
-        private readonly float _detectionRange;
-        private bool _isChasing;
-        private bool _movingRight;
+        private EnemyState _currentState = EnemyState.Patrolling;
+        private EnemyState _previousState;
+        private readonly ChasingEnemySettings _settings;
+        private readonly GameManager _gameManager;
+
+        private float _stateTimer = 0f;
+        private float _jumpCooldown = 0f;
+        private float _gapWidth = 0f;
+        private int _breathingOffset = 0;
+        private bool _movingRight = true;
+        private static readonly Random _random = new Random();
+
+        private bool _hasLastKnownPlayerPosition = false;
+        private PointF _lastKnownPlayerPosition;
+        private float _memoryTimer = 0f;
+
+        private Utils.PathFinder _pathFinder;
         private List<PointF> _currentPath = new List<PointF>();
         private int _currentPathIndex = -1;
-        private float _pathUpdateTimer = 0;
-        private const float PATH_UPDATE_INTERVAL = 1.0f;
-        private NavigationGraph _navigationGraph;
-        private bool _shouldJump = false;
-        private float _jumpCooldown = 0;
-        private const float JUMP_COOLDOWN_TIME = 0.5f;
-
-        private float _changeDirectionTimer = 0;
-        private float _idleTimer = 0;
-        private bool _isIdle = false;
-        private const float MIN_DIRECTION_CHANGE_TIME = 0.5f;
-        private const float IDLE_TIME = 1.0f;
-        private const float CHASE_HYSTERESIS = 50.0f;
-
-        private bool _needToJumpOverGap = false;
-        private float _jumpDistance = 0f;
-        private float _minJumpSpeed = 5.0f;
-
-        private const float JUMP_FORCE_BASE = 10.0f;
-        private const float JUMP_FORCE_MAX = 12.0f;
-        private const float PRE_JUMP_ACCELERATION = 1.0f;
-        private float _preJumpTimer = 0f;
-        private const float PRE_JUMP_TIME = 0.2f;
-        private bool _isInJumpOverGapMode = false;
-        private float _jumpBoostFactor = 1f;
-        private float _gapJumpTimer = 0f;
-
-        private GameManager _gameManager;
-        private int _breathingOffset = 0;
-
+        private float _pathUpdateTimer = 0f;
+        private const float PATH_UPDATE_INTERVAL = 0.5f; private bool _jumpToTarget = false;
         public ChasingEnemy(float x, float y, Player player, float speed, float detectionRange, Image image)
             : base(x, y, 32, 32, player, speed, image)
         {
-            _detectionRange = detectionRange;
-            _movingRight = true;
             _gameManager = GameManager.Instance;
+            _settings = new ChasingEnemySettings
+            {
+                ChaseSpeed = speed,
+                PatrolSpeed = speed * 0.5f,
+                DetectionRange = detectionRange
+            };
+
+            _pathFinder = new Utils.PathFinder(_gameManager.GetPlatforms().ToList());
 
             if (image == null && Sprite != null)
             {
                 Sprite.BackColor = Color.Crimson;
             }
 
-            _navigationGraph = new NavigationGraph(_gameManager.GetPlatforms());
+            Console.WriteLine("Создан преследующий враг с системой поиска пути");
         }
 
         public override void Update(GameTime gameTime, Camera camera)
         {
-            _changeDirectionTimer -= gameTime.DeltaTime;
-            _pathUpdateTimer -= gameTime.DeltaTime;
-            if (_jumpCooldown > 0)
-                _jumpCooldown -= gameTime.DeltaTime;
-            if (_gapJumpTimer > 0)
+            UpdateTimers(gameTime);
+
+            switch (_currentState)
             {
-                _gapJumpTimer -= gameTime.DeltaTime;
-            }
-            if (IsOnGround() && !_needToJumpOverGap && !_isInJumpOverGapMode)
-            {
-                int direction = _player.Position.X > Position.X ? 1 : -1;
-                bool isGapAhead = CheckForGapAhead(direction, out float gapWidth);
-
-                if (isGapAhead)
-                {
-                    _needToJumpOverGap = true;
-                    _jumpDistance = gapWidth;
-                    _preJumpTimer = PRE_JUMP_TIME;
-                    _movingRight = direction > 0;
-                    VelocityX = _movingRight ? Math.Max(_speed, _minJumpSpeed) : Math.Min(-_speed, -_minJumpSpeed);
-                    Console.WriteLine($"ПРИОРИТЕТНАЯ ПРОВЕРКА: Обнаружена пропасть шириной {gapWidth}! Готовимся к прыжку.");
-                }
-            }
-            if (_preJumpTimer > 0)
-            {
-                _preJumpTimer -= gameTime.DeltaTime;
-                VelocityX += _movingRight ? PRE_JUMP_ACCELERATION : -PRE_JUMP_ACCELERATION;
-
-                if (_movingRight && VelocityX > _speed * 1.5f)
-                    VelocityX = _speed * 1.5f;
-                else if (!_movingRight && VelocityX < -_speed * 1.5f)
-                    VelocityX = -_speed * 1.5f;
-
-                if (_preJumpTimer <= 0 && IsOnGround() && _jumpCooldown <= 0 && _needToJumpOverGap)
-                {
-                    float jumpForceBase = JUMP_FORCE_BASE;
-                    float jumpForceExtra = 0;
-                    bool playerOnSameLevel = _player != null && Math.Abs(_player.Position.Y - Position.Y) < 50f;
-
-                    if (_jumpDistance < 50f)
-                    {
-                        if (playerOnSameLevel)
-                        {
-                            jumpForceBase = JUMP_FORCE_BASE * 0.7f; _jumpBoostFactor = 1.5f; Console.WriteLine("Игрок рядом, делаем слабый прыжок через маленькую яму");
-                        }
-                        else
-                        {
-                            jumpForceBase = JUMP_FORCE_BASE * 0.9f;
-                            _jumpBoostFactor = 2f;
-                        }
-                    }
-                    else if (_jumpDistance < 100f)
-                    {
-                        jumpForceBase = JUMP_FORCE_BASE * 1.1f;
-                        jumpForceExtra = (_jumpDistance - 50f) / 45;
-                        _jumpBoostFactor = 2.0f;
-                    }
-                    else
-                    {
-                        jumpForceBase = JUMP_FORCE_BASE * 1.25f;
-                        jumpForceExtra = (_jumpDistance - 100f) / 100f;
-                        jumpForceExtra = Math.Min(jumpForceExtra, 1.0f);
-                        _jumpBoostFactor = 2.2f + (jumpForceExtra * 0.5f);
-                    }
-
-                    float jumpForce = jumpForceBase + jumpForceExtra;
-                    jumpForce = Math.Min(jumpForce, JUMP_FORCE_MAX);
-
-                    Position = new PointF(Position.X + (_movingRight ? 3f : -3f), Position.Y);
-
-                    VelocityY = -jumpForce;
-                    VelocityX = _movingRight ? _speed * _jumpBoostFactor : -_speed * _jumpBoostFactor;
-
-                    _isInJumpOverGapMode = true;
-                    _jumpCooldown = JUMP_COOLDOWN_TIME;
-                    _needToJumpOverGap = false;
-
-                    _gapJumpTimer = 0.5f + (_jumpDistance / 100f);
-                }
+                case EnemyState.Patrolling:
+                    UpdatePatrolState(gameTime);
+                    break;
+                case EnemyState.Chasing:
+                    UpdateChaseState(gameTime);
+                    break;
+                case EnemyState.Jumping:
+                    UpdateJumpState(gameTime);
+                    break;
+                case EnemyState.Recovery:
+                    UpdateRecoveryState(gameTime);
+                    break;
+                case EnemyState.Idle:
+                    UpdateIdleState(gameTime);
+                    break;
             }
 
-            if (_isIdle)
-            {
-                _idleTimer -= gameTime.DeltaTime;
-                if (_idleTimer <= 0)
-                {
-                    _isIdle = false;
-                }
-
-                if (Sprite != null)
-                {
-                    int originalHeight = 32;
-                    int breathingAmplitude = 2;
-                    int breathingOffset = (int)(Math.Sin(_idleTimer * 5) * breathingAmplitude);
-                    _breathingOffset = breathingOffset;
-                }
-
-                VelocityX = 0;
-            }
-            else
-            {
-                _breathingOffset = 0;
-
-                bool playerInRange = DetectPlayerWithHysteresis(_detectionRange, CHASE_HYSTERESIS);
-
-                if (playerInRange != _isChasing && _changeDirectionTimer <= 0)
-                {
-                    _isChasing = playerInRange;
-                    _changeDirectionTimer = MIN_DIRECTION_CHANGE_TIME;
-
-                    if (_isChasing)
-                    {
-                        _pathUpdateTimer = 0;
-                    }
-                }
-
-                if (_isChasing && _player != null)
-                {
-                    bool directMovePossible = MoveDirectlyTowardsPlayer();
-                    if (!_needToJumpOverGap && !directMovePossible)
-                    {
-                        if (ShouldJumpToReachPlayer() && _jumpCooldown <= 0 && IsOnGround())
-                        {
-                            VelocityY = -12f;
-                            _jumpCooldown = JUMP_COOLDOWN_TIME;
-
-                            if (_player.Position.X < Position.X)
-                            {
-                                VelocityX = -_speed;
-                                _movingRight = false;
-                            }
-                            else
-                            {
-                                VelocityX = _speed;
-                                _movingRight = true;
-                            }
-
-                            Console.WriteLine("Прыжок вверх для достижения игрока на платформе выше!");
-                        }
-                        if (!directMovePossible)
-                        {
-                            if (_pathUpdateTimer <= 0)
-                            {
-                                _currentPath = _navigationGraph.FindPath(Position, _player.Position);
-                                _currentPathIndex = _currentPath.Count > 1 ? 1 : -1;
-                                _pathUpdateTimer = PATH_UPDATE_INTERVAL;
-                            }
-
-                            if (_preJumpTimer <= 0 && !_isInJumpOverGapMode)
-                            {
-                                if (IsOnGround() && !_needToJumpOverGap)
-                                {
-                                    bool isGapAhead = CheckForGapAhead(_movingRight ? 1 : -1, out float gapWidth);
-                                    if (isGapAhead)
-                                    {
-                                        _needToJumpOverGap = true;
-                                        _jumpDistance = gapWidth;
-                                        _preJumpTimer = PRE_JUMP_TIME;
-                                        VelocityX = _movingRight ? Math.Max(_speed, _minJumpSpeed) : Math.Min(-_speed, -_minJumpSpeed);
-                                        Console.WriteLine($"Обнаружена пропасть шириной {gapWidth}! Готовимся к прыжку.");
-                                    }
-                                }
-                                else
-                                {
-                                    if (_currentPathIndex >= 0 && _currentPathIndex < _currentPath.Count)
-                                    {
-                                        PointF targetPoint = _currentPath[_currentPathIndex];
-
-                                        if (targetPoint.X < Position.X - 5)
-                                        {
-                                            VelocityX = -_speed;
-                                            _movingRight = false;
-                                        }
-                                        else if (targetPoint.X > Position.X + 5)
-                                        {
-                                            VelocityX = _speed;
-                                            _movingRight = true;
-                                        }
-                                        else
-                                        {
-                                            VelocityX = 0;
-                                            _currentPathIndex++;
-                                            if (_currentPathIndex >= _currentPath.Count)
-                                                _currentPathIndex = -1;
-                                        }
-
-                                        if (targetPoint.Y < Position.Y - 10 && _jumpCooldown <= 0 && IsOnGround())
-                                        {
-                                            VelocityY = -10f;
-                                            _jumpCooldown = JUMP_COOLDOWN_TIME;
-                                            Console.WriteLine("Прыжок вверх для достижения цели!");
-                                        }
-                                    }
-                                    else
-                                    {
-                                        if (_player.Position.X < Position.X - 5)
-                                        {
-                                            VelocityX = -_speed;
-                                            _movingRight = false;
-                                        }
-                                        else if (_player.Position.X > Position.X + 5)
-                                        {
-                                            VelocityX = _speed;
-                                            _movingRight = true;
-                                        }
-                                        else
-                                        {
-                                            VelocityX = 0;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                else
-                {
-                    if (!_isIdle && _preJumpTimer <= 0 && !_isInJumpOverGapMode)
-                    {
-                        if (IsAtPlatformEdge())
-                        {
-                            bool isGapJumpable = CheckForGapAhead(_movingRight ? 1 : -1, out float gapWidth);
-
-                            if (isGapJumpable)
-                            {
-                                _needToJumpOverGap = true;
-                                _jumpDistance = gapWidth;
-                                _preJumpTimer = PRE_JUMP_TIME;
-
-                                VelocityX = 0;
-
-                                Console.WriteLine($"На краю платформы! Подготовка к прыжку через пропасть шириной {gapWidth}");
-                            }
-                            else
-                            {
-                                _movingRight = !_movingRight;
-                                _changeDirectionTimer = MIN_DIRECTION_CHANGE_TIME;
-                            }
-                        }
-                        else if (_changeDirectionTimer <= 0 && _random.NextDouble() < 0.05)
-                        {
-                            _isIdle = true;
-                            _idleTimer = IDLE_TIME;
-                            VelocityX = 0;
-                            Console.WriteLine("Переход в режим ожидания");
-                        }
-                        else if (!_needToJumpOverGap)
-                        {
-                            VelocityX = _movingRight ? _speed * 0.5f : -_speed * 0.5f;
-                        }
-                    }
-                }
-            }
-
-            if (_isInJumpOverGapMode)
-            {
-                VelocityX = _movingRight ? _speed * _jumpBoostFactor : -_speed * _jumpBoostFactor;
-
-                if (!IsOnGround())
-                {
-                    VelocityY += 0.35f;
-                }
-                else
-                {
-                    _isInJumpOverGapMode = false;
-                    Console.WriteLine("Приземление после прыжка через пропасть");
-                }
-            }
-            else if (!IsOnGround())
-            {
-                float gravityFactor;
-
-                if (VelocityY < -5f)
-                {
-                    gravityFactor = 0.5f;
-                }
-                else if (VelocityY < 0)
-                {
-                    gravityFactor = 0.4f;
-                }
-                else
-                {
-                    gravityFactor = 0.5f;
-                }
-
-                VelocityY += gravityFactor;
-            }
-            else
-            {
-                VelocityY += 0.5f;
-            }
-
-            if (VelocityY > 10f)
-            {
-                VelocityY = 10f;
-            }
-            if (IsOnGround() && !_needToJumpOverGap && !_isInJumpOverGapMode &&
-    _isChasing && Math.Abs(VelocityX) > 0.1f)
-            {
-                int currentDirection = VelocityX > 0 ? 1 : -1;
-                bool isGapInCurrentPath = CheckForGapAhead(currentDirection, out float gapWidth);
-
-                if (isGapInCurrentPath)
-                {
-                    _needToJumpOverGap = true;
-                    _jumpDistance = gapWidth;
-                    _preJumpTimer = PRE_JUMP_TIME;
-                    _movingRight = currentDirection > 0;
-                    VelocityX = _movingRight ? Math.Max(_speed, _minJumpSpeed) : Math.Min(-_speed, -_minJumpSpeed);
-                    Console.WriteLine($"ФИНАЛЬНАЯ ПРОВЕРКА: Обнаружена пропасть перед прыжком! Ширина: {gapWidth}");
-                }
-            }
+            ApplyGravity();
 
             Position = new PointF(Position.X + VelocityX, Position.Y + VelocityY);
 
-            if (Position.X < 0)
-            {
-                Position = new PointF(0, Position.Y);
-                _movingRight = true;
-                _changeDirectionTimer = MIN_DIRECTION_CHANGE_TIME;
-                _needToJumpOverGap = false;
-                _preJumpTimer = 0;
-            }
-            else if (Position.X + Size.Width > 3000)
-            {
-                Position = new PointF(3000 - Size.Width, Position.Y);
-                _movingRight = false;
-                _changeDirectionTimer = MIN_DIRECTION_CHANGE_TIME;
-                _needToJumpOverGap = false;
-                _preJumpTimer = 0;
-            }
+            CheckWorldBounds();
 
             if (Position.Y > 1000)
             {
                 Reset(camera);
-                _needToJumpOverGap = false;
-                _preJumpTimer = 0;
-                _isInJumpOverGapMode = false;
+                ChangeState(EnemyState.Patrolling);
             }
 
             Draw(camera);
         }
 
-        protected override bool IsInJumpOverGapMode()
+        private void UpdateTimers(GameTime gameTime)
         {
-            return _isInJumpOverGapMode;
+            if (_jumpCooldown > 0)
+                _jumpCooldown -= gameTime.DeltaTime;
+
+            if (_stateTimer > 0)
+                _stateTimer -= gameTime.DeltaTime;
+
+            if (_memoryTimer > 0)
+                _memoryTimer -= gameTime.DeltaTime;
+
+            if (_pathUpdateTimer > 0)
+                _pathUpdateTimer -= gameTime.DeltaTime;
         }
 
-        public override bool Intersects(GameObject other)
+        private void ChangeState(EnemyState newState)
         {
-            if (_isInJumpOverGapMode && other is Platform platform)
+            _previousState = _currentState;
+            _currentState = newState;
+
+            switch (newState)
             {
-                RectangleF enemyRect = this.Bounds;
-                RectangleF platformRect = platform.Bounds;
-
-                if (VelocityY < 0)
-                {
-                    if (enemyRect.Top < platformRect.Bottom &&
-                        enemyRect.Top > platformRect.Top &&
-                        enemyRect.Bottom > platformRect.Bottom &&
-                        enemyRect.Right > platformRect.Left + 5 &&
-                        enemyRect.Left < platformRect.Right - 5)
+                case EnemyState.Idle:
+                    _stateTimer = _settings.IdleTime;
+                    VelocityX = 0;
+                    break;
+                case EnemyState.Recovery:
+                    _stateTimer = _settings.RecoveryTime;
+                    VelocityX = 0;
+                    break;
+                case EnemyState.Patrolling:
+                    VelocityX = _movingRight ? _settings.PatrolSpeed : -_settings.PatrolSpeed;
+                    _currentPath.Clear();
+                    _currentPathIndex = -1;
+                    break;
+                case EnemyState.Chasing:
+                    if (_pathUpdateTimer <= 0)
                     {
-                        return true;
+                        UpdatePath();
+                        _pathUpdateTimer = PATH_UPDATE_INTERVAL;
                     }
+                    break;
+            }
+
+            Console.WriteLine($"Враг переходит в состояние: {newState}");
+        }
+
+        #region State Updates
+
+        private void UpdatePatrolState(GameTime gameTime)
+        {
+            if (DetectPlayer())
+            {
+                ChangeState(EnemyState.Chasing);
+                return;
+            }
+
+            if (_hasLastKnownPlayerPosition && _memoryTimer > 0)
+            {
+                Console.WriteLine("Враг помнит где был игрок и направляется туда");
+                ChangeState(EnemyState.Chasing);
+                return;
+            }
+
+            if (IsAtPlatformEdge())
+            {
+                if (NeedToJumpGap() && CanJumpGap())
+                {
+                    PrepareJump();
+                    ChangeState(EnemyState.Jumping);
+                }
+                else
+                {
+                    _movingRight = !_movingRight;
+                    VelocityX = _movingRight ? _settings.PatrolSpeed : -_settings.PatrolSpeed;
+                }
+                return;
+            }
+
+            if (_stateTimer <= 0 && _random.NextDouble() < _settings.IdleProbability)
+            {
+                ChangeState(EnemyState.Idle);
+                return;
+            }
+
+            VelocityX = _movingRight ? _settings.PatrolSpeed : -_settings.PatrolSpeed;
+        }
+
+        private bool CheckDirectJumpToPlayer()
+        {
+            if (_player == null || !IsOnGround() || _jumpCooldown > 0)
+                return false;
+
+            if (_jumpCooldown <= 0.1f && _jumpCooldown > 0)
+                return false;
+
+            Platform currentPlatform = GetPlatformUnderEnemy();
+            if (currentPlatform == null)
+                return false;
+            if (!DetectPlayer())
+                return false;
+            Platform playerPlatform = GetPlatformUnderPlayer();
+            if (playerPlatform == currentPlatform)
+                return false;
+            float dx = _player.Position.X - Position.X;
+            float dy = Position.Y - _player.Position.Y; float horizontalDist = Math.Abs(dx);
+
+            bool nearEdge = IsNearPlatformEdge(dx > 0);
+            if (!nearEdge)
+            {
+                if (horizontalDist < 250 && Math.Abs(dy) < 100)
+                {
+                    _movingRight = dx > 0;
+                    VelocityX = _movingRight ? _settings.ChaseSpeed : -_settings.ChaseSpeed;
+                }
+                return false;
+            }
+
+            Console.WriteLine($"Проверка прямого прыжка: dx={dx}, dy={dy}, dist={horizontalDist}, у края={nearEdge}");
+
+            bool canJump = horizontalDist < 250 && dy > -60 && dy < 150 && playerPlatform != null;
+            if (canJump)
+            {
+                if (HasObstaclesInJumpPath(dx, dy))
+                {
+                    Console.WriteLine("ПРЕПЯТСТВИЕ НА ПУТИ ПРЫЖКА!");
+                    return false;
                 }
 
-                if (VelocityY > 0)
-                {
-                    RectangleF landingRect = new RectangleF(
-enemyRect.X - 5, enemyRect.Y + enemyRect.Height - 2,
-enemyRect.Width + 10, 6);
-                    bool canLand = landingRect.IntersectsWith(platformRect) &&
-                                   enemyRect.Bottom < platformRect.Top + 15;
-                    return canLand;
-                }
+                Console.WriteLine("РЕШЕНИЕ: ПРЫГАЕМ К ИГРОКУ НАПРЯМУЮ!");
+                return true;
+            }
 
-                if (VelocityY < 0)
+            return false;
+        }
+
+        private bool IsNearPlatformEdge(bool rightDirection)
+        {
+            float edgeCheckDistance = rightDirection ?
+                Size.Width + 5 : -5;
+            RectangleF edgeCheck = new RectangleF(
+                Position.X + (rightDirection ? Size.Width : 0),
+                Position.Y + Size.Height,
+                rightDirection ? 10 : -10,
+                5
+            );
+
+            bool foundGround = false;
+            foreach (var platform in _gameManager.GetPlatforms())
+            {
+                if (edgeCheck.IntersectsWith(platform.Bounds))
                 {
-                    if ((_movingRight && platformRect.Left > enemyRect.Left && platformRect.Left < enemyRect.Right) ||
-    (!_movingRight && platformRect.Right < enemyRect.Right && platformRect.Right > enemyRect.Left))
-                    {
-                        return false;
-                    }
+                    foundGround = true;
+                    break;
                 }
             }
 
-            return base.Intersects(other);
-        }
-
-
-
-
-        private bool CheckForGapAhead(int direction, out float gapWidth)
-        {
-            gapWidth = 0f;
-            if (!IsOnGround()) return false;
-
-            float lookAheadDistance = 2f; float startX = direction > 0 ?
-    Position.X + Size.Width + lookAheadDistance :
-    Position.X - lookAheadDistance;
-            float startY = Position.Y + Size.Height;
-            const float CHECK_STEP = 3f; const float MAX_GAP_CHECK_DISTANCE = 400f;
-            const float VERTICAL_CHECK_DISTANCE = 150f;
-            bool foundGap = false;
-            bool foundPlatformAfterGap = false;
-            float gapStartX = startX;
-            float gapEndX = startX;
-
-            for (float testX = startX;
-     Math.Abs(testX - startX) <= MAX_GAP_CHECK_DISTANCE;
-     testX += direction * CHECK_STEP)
+            if (foundGround)
             {
-                bool hasGround = false;
+                float distance = 0;
+                const float MAX_CHECK = 40f; const float CHECK_STEP = 5f;
 
-                for (float testY = startY; testY <= startY + VERTICAL_CHECK_DISTANCE; testY += CHECK_STEP)
+                for (float offset = 0; offset <= MAX_CHECK; offset += CHECK_STEP)
                 {
-                    RectangleF testPoint = new RectangleF(testX - 1, testY - 1, 3, 3);
+                    float checkX = Position.X + (rightDirection ?
+                        Size.Width + offset :
+                        -offset);
 
+                    RectangleF check = new RectangleF(
+                        checkX - 2,
+                        Position.Y + Size.Height,
+                        4,
+                        5
+                    );
+
+                    bool hasGround = false;
                     foreach (var platform in _gameManager.GetPlatforms())
                     {
-                        if (testPoint.IntersectsWith(platform.Bounds))
+                        if (check.IntersectsWith(platform.Bounds))
                         {
                             hasGround = true;
                             break;
                         }
                     }
 
-                    if (hasGround) break;
+                    if (!hasGround)
+                    {
+                        distance = offset;
+                        break;
+                    }
                 }
 
-                if (!hasGround && !foundGap)
-                {
-                    foundGap = true;
-                    gapStartX = testX;
-                }
-                else if (hasGround && foundGap && !foundPlatformAfterGap)
-                {
-                    foundPlatformAfterGap = true;
-                    gapEndX = testX;
-                    break;
-                }
+                return distance > 0 && distance < 20;
             }
 
-            if (foundGap && foundPlatformAfterGap)
+            return true;
+        }
+
+        private Platform GetPlatformUnderEnemy()
+        {
+            RectangleF checkRect = new RectangleF(
+                Position.X,
+                Position.Y + Size.Height,
+                Size.Width,
+                5
+            );
+
+            foreach (var platform in _gameManager.GetPlatforms())
             {
-                gapWidth = Math.Abs(gapEndX - gapStartX);
+                if (checkRect.IntersectsWith(platform.Bounds))
+                    return platform;
+            }
 
-                float jumpBoostFactor = 2.0f;
-                if (gapWidth < 50f) jumpBoostFactor = 1.8f; else if (gapWidth > 100f) jumpBoostFactor = 2.3f;
-                float maxJumpableGap = _speed * jumpBoostFactor * 25f;
+            return null;
+        }
 
-                if (gapWidth < 20f)
+        private Platform GetPlatformUnderPlayer()
+        {
+            if (_player == null)
+                return null;
+
+            RectangleF checkRect = new RectangleF(
+                _player.Position.X,
+                _player.Position.Y + _player.Size.Height,
+                _player.Size.Width,
+                5
+            );
+
+            foreach (var platform in _gameManager.GetPlatforms())
+            {
+                if (checkRect.IntersectsWith(platform.Bounds))
+                    return platform;
+            }
+
+            return null;
+        }
+
+        private bool HasObstaclesInJumpPath(float dx, float dy)
+        {
+            int steps = 12;
+            float jumpHeight = Math.Max(40, dy + 30);
+            int direction = dx > 0 ? 1 : -1;
+            float distance = Math.Abs(dx);
+
+            for (int i = 1; i < steps; i++)
+            {
+                float t = i / (float)steps;
+
+                float x = Position.X + dx * t;
+                float y = Position.Y - jumpHeight * 4.5f * t * (1 - t);
+                if (dy > 0)
                 {
-                    return DetectPlayer(200f);
+                    y -= dy * t;
+                }
+                else if (dy < 0 && t > 0.5f)
+                {
+                    float descent = dy * (t - 0.5f) * 2; y -= descent;
                 }
 
-                return gapWidth <= maxJumpableGap;
+                RectangleF checkRect = new RectangleF(x - Size.Width / 2, y - Size.Height / 2, Size.Width, Size.Height);
+
+                foreach (var platform in _gameManager.GetPlatforms())
+                {
+                    if (platform.Size.Height > 5 && checkRect.IntersectsWith(platform.Bounds))
+                    {
+                        if (i <= 2 || i >= steps - 2)
+                            continue;
+
+                        if (t < 0.5f && platform.Position.Y > Position.Y + Size.Height / 2)
+                            continue;
+
+                        float targetY = Position.Y - dy;
+                        if (t > 0.5f && platform.Position.Y + platform.Size.Height < targetY)
+                            continue;
+
+                        return true;
+                    }
+                }
             }
 
             return false;
         }
 
-        private bool IsOnGround()
+        private void DoDirectJumpToPlayer()
+        {
+            float dx = _player.Position.X - Position.X;
+            float dy = Position.Y - _player.Position.Y;
+            float horizontalDist = Math.Abs(dx);
+
+            float jumpStrength = _settings.JumpStrength * 1.0f;
+
+            if (horizontalDist > 120)
+                jumpStrength *= 1.15f;
+            else if (horizontalDist > 80)
+                jumpStrength *= 1.05f;
+            if (dy > 50)
+                jumpStrength *= 1.15f;
+            else if (dy > 20)
+                jumpStrength *= 1.1f;
+            float speedBoost = _settings.JumpSpeedBoost * 1.2f;
+
+            if (horizontalDist > 100)
+                speedBoost *= 1.3f;
+            else if (horizontalDist > 70)
+                speedBoost *= 1.2f;
+
+            VelocityY = -jumpStrength;
+
+            _movingRight = dx > 0;
+            VelocityX = _movingRight ?
+                _settings.ChaseSpeed * speedBoost :
+                -_settings.ChaseSpeed * speedBoost;
+
+            _jumpCooldown = _settings.JumpCooldown;
+
+            Console.WriteLine($"ПРЫЖОК К ИГРОКУ: сила={jumpStrength}, скорость={Math.Abs(VelocityX)}, дистанция={horizontalDist}");
+        }
+
+        private void UpdateChaseState(GameTime gameTime)
+        {
+            bool canSeePlayer = DetectPlayer();
+
+            if (canSeePlayer)
+            {
+                _hasLastKnownPlayerPosition = true;
+                _lastKnownPlayerPosition = _player.Position;
+                _memoryTimer = _settings.MemoryDuration;
+            }
+            else if (!_hasLastKnownPlayerPosition || _memoryTimer <= 0)
+            {
+                _currentPath.Clear();
+                _currentPathIndex = -1;
+                ChangeState(EnemyState.Patrolling);
+                return;
+            }
+
+            if (canSeePlayer && IsOnGround() && _jumpCooldown <= 0)
+            {
+                if (CheckDirectJumpToPlayer())
+                {
+                    DoDirectJumpToPlayer();
+                    return;
+                }
+            }
+
+            if (_pathUpdateTimer <= 0)
+            {
+                UpdatePath();
+                _pathUpdateTimer = PATH_UPDATE_INTERVAL;
+            }
+
+            if (IsOnGround() && NeedToJumpGap())
+            {
+                if (CanJumpGap())
+                {
+                    PrepareJump();
+                    ChangeState(EnemyState.Jumping);
+                }
+                else
+                {
+                    UpdatePath();
+                    _movingRight = !_movingRight;
+                }
+                return;
+            }
+
+            if (IsOnGround() && _jumpCooldown <= 0)
+            {
+                if (_currentPathIndex >= 0 && _currentPathIndex < _currentPath.Count)
+                {
+                    PointF nextPoint = _currentPath[_currentPathIndex];
+                    if (Position.Y - nextPoint.Y > 20 && Math.Abs(nextPoint.X - Position.X) < 150)
+                    {
+                        _movingRight = nextPoint.X > Position.X;
+                        Jump();
+                        return;
+                    }
+                }
+                else if (canSeePlayer && ShouldJumpToReachPlayer())
+                {
+                    Jump();
+                    return;
+                }
+                else if (!canSeePlayer && _hasLastKnownPlayerPosition && ShouldJumpToReachPoint(_lastKnownPlayerPosition))
+                {
+                    Jump();
+                    return;
+                }
+            }
+
+            if (_currentPath.Count > 0 && _currentPathIndex >= 0 && _currentPathIndex < _currentPath.Count)
+            {
+                FollowPath();
+            }
+            else if (canSeePlayer)
+            {
+                MoveTowardsPlayer();
+            }
+            else
+            {
+                MoveTowardsPoint(_lastKnownPlayerPosition);
+            }
+        }
+
+        private void UpdateJumpState(GameTime gameTime)
+        {
+            if (IsOnGround() && VelocityY >= 0)
+            {
+                ChangeState(EnemyState.Recovery);
+                return;
+            }
+
+            VelocityX = _movingRight ?
+    _settings.ChaseSpeed * _settings.JumpSpeedBoost :
+    -_settings.ChaseSpeed * _settings.JumpSpeedBoost;
+        }
+
+        private void UpdateRecoveryState(GameTime gameTime)
+        {
+            if (_stateTimer <= 0)
+            {
+                ChangeState(DetectPlayer() ? EnemyState.Chasing : EnemyState.Patrolling);
+            }
+        }
+
+        private void UpdateIdleState(GameTime gameTime)
+        {
+            _breathingOffset = (int)(Math.Sin(_stateTimer * 5) * 2);
+
+            if (_stateTimer <= 0)
+            {
+                _breathingOffset = 0;
+                ChangeState(DetectPlayer() ? EnemyState.Chasing : EnemyState.Patrolling);
+            }
+        }
+
+        #endregion
+
+        #region Path Finding and Movement
+
+        private void FollowPath()
+        {
+            if (_currentPathIndex < 0 || _currentPathIndex >= _currentPath.Count)
+                return;
+
+            PointF target = _currentPath[_currentPathIndex];
+
+            float distanceToTarget = Math.Abs(target.X - Position.X);
+            if (distanceToTarget < 15)
+            {
+                _currentPathIndex++;
+
+                if (_currentPathIndex >= _currentPath.Count)
+                {
+                    _currentPath.Clear();
+                    _currentPathIndex = -1;
+                    return;
+                }
+
+                target = _currentPath[_currentPathIndex];
+            }
+
+            if (target.X > Position.X + 5)
+            {
+                _movingRight = true;
+                VelocityX = _settings.ChaseSpeed;
+            }
+            else if (target.X < Position.X - 5)
+            {
+                _movingRight = false;
+                VelocityX = -_settings.ChaseSpeed;
+            }
+            else
+            {
+                VelocityX = 0;
+            }
+        }
+
+        private void UpdatePath()
+        {
+            PointF targetPosition = _player != null && DetectPlayer()
+                ? _player.Position
+                : (_hasLastKnownPlayerPosition ? _lastKnownPlayerPosition : Position);
+
+            _currentPath = _pathFinder.FindPath(
+    Position,
+    targetPosition,
+    Size.Width,
+    Size.Height
+);
+
+            _currentPathIndex = _currentPath.Count > 0 ? 0 : -1;
+
+            if (_currentPath.Count > 0)
+            {
+                Console.WriteLine($"Найден путь с {_currentPath.Count} точками");
+            }
+            else
+            {
+                Console.WriteLine("Путь не найден, движение напрямую");
+            }
+        }
+
+        private bool DetectPlayer()
+        {
+            if (_player == null) return false;
+
+            float distanceX = Math.Abs(_player.Position.X - Position.X);
+            float distanceY = Math.Abs(_player.Position.Y - Position.Y);
+
+            float effectiveRange = _currentState == EnemyState.Chasing ?
+    _settings.DetectionRange * 1.3f : _settings.DetectionRange;
+
+            if (distanceX > effectiveRange || distanceY > effectiveRange * 0.75f)
+                return false;
+
+            return CheckLineOfSightImproved(_player.Position);
+        }
+
+        private bool CheckLineOfSightImproved(PointF targetPos)
+        {
+            PointF start = new PointF(Position.X + Size.Width / 2, Position.Y + Size.Height / 2);
+            PointF end = new PointF(targetPos.X + _player.Size.Width / 2, targetPos.Y + _player.Size.Height / 2);
+
+            float dx = end.X - start.X;
+            float dy = end.Y - start.Y;
+            float distance = (float)Math.Sqrt(dx * dx + dy * dy);
+
+            if (distance < 0.001f) return true;
+
+            float nx = dx / distance;
+            float ny = dy / distance;
+
+            int stepsCount = distance < 150 ? 4 : 8;
+
+            for (int i = 1; i < stepsCount; i++)
+            {
+                float t = i / (float)stepsCount;
+                PointF checkPoint = new PointF(
+                    start.X + nx * distance * t,
+                    start.Y + ny * distance * t
+                );
+
+                RectangleF checkRect = new RectangleF(checkPoint.X - 3, checkPoint.Y - 3, 6, 6);
+
+                bool blocked = false;
+                foreach (var platform in _gameManager.GetPlatforms())
+                {
+                    if (platform.Size.Height > 15 && checkRect.IntersectsWith(platform.Bounds))
+                    {
+                        blocked = true;
+                        break;
+                    }
+                }
+
+                if (blocked)
+                {
+                    RectangleF playerFeetCheck = new RectangleF(
+    end.X - 5,
+    targetPos.Y + _player.Size.Height - 5,
+    10, 10);
+
+                    RectangleF playerHeadCheck = new RectangleF(
+                        end.X - 5,
+                        targetPos.Y + 5,
+                        10, 10);
+
+                    if (!IsPathBlocked(start, playerFeetCheck.Location) ||
+    !IsPathBlocked(start, playerHeadCheck.Location))
+                    {
+                        return true;
+                    }
+
+                    return false;
+                }
+            }
+
+            if (Math.Abs(ny) < 0.3f && Math.Abs(dx) > 30f)
+            {
+                if (IsGapBetweenPoints(start, end))
+                {
+                    if (distance < 150)
+                        return true;
+
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private bool IsPathBlocked(PointF start, PointF end)
+        {
+            float dx = end.X - start.X;
+            float dy = end.Y - start.Y;
+            float distance = (float)Math.Sqrt(dx * dx + dy * dy);
+
+            if (distance < 0.001f) return false;
+
+            float nx = dx / distance;
+            float ny = dy / distance;
+
+            int steps = 5;
+            for (int i = 1; i < steps; i++)
+            {
+                float t = i / (float)steps;
+                PointF checkPoint = new PointF(
+                    start.X + nx * distance * t,
+                    start.Y + ny * distance * t
+                );
+
+                RectangleF checkRect = new RectangleF(checkPoint.X - 2, checkPoint.Y - 2, 4, 4);
+
+                foreach (var platform in _gameManager.GetPlatforms())
+                {
+                    if (platform.Size.Height > 15 && checkRect.IntersectsWith(platform.Bounds))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private bool IsGapBetweenPoints(PointF start, PointF end)
+        {
+            int direction = start.X < end.X ? 1 : -1;
+            float distance = Math.Abs(end.X - start.X);
+            int steps = Math.Max(5, (int)(distance / 20));
+
+            for (int i = 1; i < steps; i++)
+            {
+                float testX = start.X + direction * (distance * i / steps);
+
+                RectangleF groundCheck = new RectangleF(
+    testX - 2,
+    Math.Min(start.Y, end.Y),
+    4,
+    Math.Abs(start.Y - end.Y) + 100
+);
+
+                bool foundGround = false;
+                foreach (var platform in _gameManager.GetPlatforms())
+                {
+                    if (groundCheck.IntersectsWith(platform.Bounds))
+                    {
+                        foundGround = true;
+                        break;
+                    }
+                }
+
+                if (!foundGround)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private void MoveTowardsPlayer()
+        {
+            if (_player == null) return;
+
+            if (_player.Position.X > Position.X + 5)
+            {
+                _movingRight = true;
+                VelocityX = _settings.ChaseSpeed;
+            }
+            else if (_player.Position.X < Position.X - 5)
+            {
+                _movingRight = false;
+                VelocityX = -_settings.ChaseSpeed;
+            }
+            else
+            {
+                VelocityX = 0;
+            }
+        }
+
+        private void MoveTowardsPoint(PointF target)
+        {
+            if (target.X > Position.X + 5)
+            {
+                _movingRight = true;
+                VelocityX = _settings.ChaseSpeed;
+            }
+            else if (target.X < Position.X - 5)
+            {
+                _movingRight = false;
+                VelocityX = -_settings.ChaseSpeed;
+            }
+            else
+            {
+                VelocityX = 0;
+
+                if (DetectPlayer())
+                {
+                    _hasLastKnownPlayerPosition = true;
+                    _lastKnownPlayerPosition = _player.Position;
+                    _memoryTimer = _settings.MemoryDuration;
+                }
+                else
+                {
+                    _hasLastKnownPlayerPosition = false;
+                }
+            }
+        }
+
+        private bool ShouldJumpToReachPoint(PointF target)
+        {
+            if (!IsOnGround() || _jumpCooldown > 0)
+                return false;
+
+            float verticalDiff = Position.Y - target.Y;
+            float horizontalDist = Math.Abs(target.X - Position.X);
+
+            return verticalDiff > 30 && horizontalDist < 120;
+        }
+
+        #endregion
+
+        #region Jumping and Gap Handling
+
+        private bool NeedToJumpGap()
+        {
+            if (!IsOnGround())
+                return false;
+
+            int direction = _movingRight ? 1 : -1;
+            float checkDistance = 20f;
+
+            RectangleF checkRect = new RectangleF(
+    Position.X + (direction * (Size.Width / 2 + checkDistance)),
+    Position.Y + Size.Height + 1,
+    10,
+    20
+);
+
+            bool foundGround = false;
+            foreach (var platform in _gameManager.GetPlatforms())
+            {
+                if (checkRect.IntersectsWith(platform.Bounds))
+                {
+                    foundGround = true;
+                    break;
+                }
+            }
+
+            if (!foundGround)
+            {
+                _gapWidth = MeasureGapWidth(direction);
+                return true;
+            }
+
+            return false;
+        }
+
+        private float MeasureGapWidth(int direction)
+        {
+            float startX = direction > 0 ?
+                Position.X + Size.Width + 2 :
+                Position.X - 2;
+            float startY = Position.Y + Size.Height;
+
+            const float CHECK_STEP = 5f;
+            const float MAX_CHECK_DISTANCE = 300f;
+
+            float gapStart = startX;
+            float gapEnd = startX;
+            bool foundGap = false;
+            bool foundEnd = false;
+
+            for (float testX = startX;
+                 Math.Abs(testX - startX) <= MAX_CHECK_DISTANCE;
+                 testX += direction * CHECK_STEP)
+            {
+                bool hasGround = false;
+
+                RectangleF testRect = new RectangleF(testX - 2, startY, 4, 30);
+
+                foreach (var platform in _gameManager.GetPlatforms())
+                {
+                    if (testRect.IntersectsWith(platform.Bounds))
+                    {
+                        hasGround = true;
+                        break;
+                    }
+                }
+
+                if (!hasGround && !foundGap)
+                {
+                    foundGap = true;
+                    gapStart = testX;
+                }
+                else if (hasGround && foundGap && !foundEnd)
+                {
+                    foundEnd = true;
+                    gapEnd = testX;
+                    break;
+                }
+            }
+
+            if (foundGap && foundEnd)
+            {
+                return Math.Abs(gapEnd - gapStart);
+            }
+
+            return MAX_CHECK_DISTANCE;
+        }
+
+        private bool CanJumpGap()
+        {
+            float maxJumpDistance = _settings.ChaseSpeed * _settings.JumpSpeedBoost * 14f;
+
+            if (_currentState == EnemyState.Chasing)
+                maxJumpDistance *= 1.2f;
+
+            return _gapWidth < maxJumpDistance;
+        }
+
+
+
+        private bool ShouldJumpToReachPlayer()
+        {
+            if (_player == null || !IsOnGround() || _jumpCooldown > 0)
+                return false;
+
+            float verticalDiff = Position.Y - _player.Position.Y;
+            float horizontalDist = Math.Abs(_player.Position.X - Position.X);
+
+            return verticalDiff > 20 && horizontalDist < 150;
+        }
+
+        private void Jump()
+        {
+            VelocityY = -_settings.JumpStrength;
+            _jumpCooldown = _settings.JumpCooldown;
+
+            if (_player != null)
+            {
+                _movingRight = _player.Position.X > Position.X;
+            }
+
+            Console.WriteLine("Прыжок вверх для достижения игрока!");
+        }
+
+        private bool IsAtPlatformEdge()
+        {
+            int direction = _movingRight ? 1 : -1;
+            float edgeCheckDistance = 10f;
+
+            RectangleF edgeCheck = new RectangleF(
+                Position.X + (direction * (Size.Width / 2)),
+                Position.Y + Size.Height + 1,
+                edgeCheckDistance * direction,
+                5
+            );
+
+            bool foundGround = false;
+            foreach (var platform in _gameManager.GetPlatforms())
+            {
+                if (edgeCheck.IntersectsWith(platform.Bounds))
+                {
+                    foundGround = true;
+                    break;
+                }
+            }
+
+            return !foundGround && IsOnGround();
+        }
+
+        #endregion
+
+        #region Utility Methods
+
+        private void ApplyGravity()
+        {
+            float gravityFactor = 0.55f;
+
+            if (_currentState == EnemyState.Jumping)
+            {
+                if (VelocityY < 0)
+                    gravityFactor = 0.45f;
+                else
+                    gravityFactor = 0.6f;
+            }
+
+            VelocityY += gravityFactor;
+
+            if (VelocityY > 12f)
+                VelocityY = 12f;
+        }
+
+        private void CheckWorldBounds()
+        {
+            if (Position.X < 0)
+            {
+                Position = new PointF(0, Position.Y);
+                _movingRight = true;
+            }
+            else if (Position.X + Size.Width > 3000)
+            {
+                Position = new PointF(3000 - Size.Width, Position.Y);
+                _movingRight = false;
+            }
+        }
+
+        protected override bool IsOnGround()
         {
             RectangleF testRect = new RectangleF(
-                Position.X, Position.Y + Size.Height + 1,
-                Size.Width, 2);
+    Position.X + 2,
+    Position.Y + Size.Height + 1,
+    Size.Width - 4,
+    2
+);
 
             foreach (var platform in _gameManager.GetPlatforms())
             {
                 if (testRect.IntersectsWith(platform.Bounds))
                     return true;
             }
+
             return false;
         }
 
@@ -765,45 +1262,36 @@ enemyRect.Width + 10, 6);
                 {
                     PointF screenPos = camera.WorldToScreen(Position);
 
-                    if (_breathingOffset != 0)
+                    switch (_currentState)
                     {
-                        int originalHeight = 32;
-                        int newHeight = originalHeight + _breathingOffset;
-                        Sprite.Height = newHeight;
+                        case EnemyState.Idle:
+                            Sprite.Height = 32 + _breathingOffset;
+                            Sprite.Location = new Point(
+                                (int)screenPos.X,
+                                (int)screenPos.Y - _breathingOffset / 2);
+                            break;
 
-                        Sprite.Location = new Point(
-                            (int)screenPos.X,
-                            (int)screenPos.Y + (originalHeight - newHeight) / 2);
+                        case EnemyState.Jumping:
+                            if (VelocityY < 0)
+                            {
+                                Sprite.Height = 36;
+                                Sprite.Location = new Point((int)screenPos.X, (int)screenPos.Y - 4);
+                            }
+                            else
+                            {
+                                Sprite.Height = 34;
+                                Sprite.Location = new Point((int)screenPos.X, (int)screenPos.Y - 2);
+                            }
+                            break;
+
+                        default:
+                            Sprite.Height = 32;
+                            Sprite.Location = new Point((int)screenPos.X, (int)screenPos.Y);
+                            break;
                     }
-                    else if (_preJumpTimer > 0)
-                    {
-                        Sprite.Height = 28;
-                        Sprite.Location = new Point((int)screenPos.X, (int)screenPos.Y + 4);
-                    }
-                    else if (_needToJumpOverGap && IsOnGround())
-                    {
-                        Sprite.Height = 30;
-                        Sprite.Location = new Point((int)screenPos.X, (int)screenPos.Y + 2);
-                    }
-                    else if (!IsOnGround())
-                    {
-                        if (VelocityY < 0)
-                        {
-                            Sprite.Height = 36;
-                            Sprite.Location = new Point((int)screenPos.X, (int)screenPos.Y - 4);
-                        }
-                        else
-                        {
-                            Sprite.Height = 34;
-                            Sprite.Location = new Point((int)screenPos.X, (int)screenPos.Y - 2);
-                        }
-                    }
-                    else
-                    {
-                        Sprite.Location = new Point((int)screenPos.X, (int)screenPos.Y);
-                        Sprite.Height = 32;
-                    }
+
                     Sprite.Visible = true;
+
                 }
                 else
                 {
@@ -812,262 +1300,32 @@ enemyRect.Width + 10, 6);
             }
         }
 
-        private bool IsAtPlatformEdge()
+        private void DrawDebugPath(Camera camera)
         {
-            float[] probeDistances = { 10f, 20f, 40f };
-            foreach (float probeDistance in probeDistances)
-            {
-                float probeX = _movingRight ?
-                    Position.X + Size.Width + probeDistance :
-                    Position.X - probeDistance;
+            if (_currentPath.Count <= 0 || _currentPathIndex < 0)
+                return;
 
-                float probeY = Position.Y + Size.Height + 5;
-
-                RectangleF probe1 = new RectangleF(probeX, probeY, 5, 5); RectangleF probe2 = new RectangleF(probeX, probeY - 10, 5, 5);
-                bool foundGround = false;
-
-                foreach (var obj in _gameManager.GetPlatforms())
-                {
-                    if (probe1.IntersectsWith(obj.Bounds) || probe2.IntersectsWith(obj.Bounds))
-                    {
-                        foundGround = true;
-                        break;
-                    }
-                }
-
-                if (probeX < 0 || probeX > 3000)
-                {
-                    return true;
-                }
-
-                if (!foundGround)
-                {
-                    if (probeDistance <= 20f)
-                    {
-                        return true;
-                    }
-
-                    bool playerIsClose = DetectPlayer(250f);
-                    if (playerIsClose)
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            return false;
         }
 
-        private bool DetectPlayerWithHysteresis(float baseRange, float hysteresis)
+        public override void Reset(Camera camera)
         {
-            if (_player == null) return false;
+            base.Reset(camera);
 
-            float distanceX = Math.Abs(_player.Position.X - Position.X);
-            float distanceY = Math.Abs(_player.Position.Y - Position.Y);
+            _currentState = EnemyState.Patrolling;
+            _stateTimer = 0;
+            _jumpCooldown = 0;
+            _breathingOffset = 0;
+            _hasLastKnownPlayerPosition = false;
+            _memoryTimer = 0;
 
-            float effectiveRange = _isChasing ? baseRange + hysteresis : baseRange;
-
-            bool inRange = distanceX < effectiveRange && distanceY < effectiveRange * 0.75f;
-
-            if (!inRange && distanceX < effectiveRange * 1.5f && distanceY < effectiveRange * 1.0f)
-            {
-                bool hasLineOfSight = CheckLineOfSight(_player.Position);
-                if (hasLineOfSight)
-                {
-                    return true;
-                }
-            }
-
-            return inRange;
+            _currentPath.Clear();
+            _currentPathIndex = -1;
+            _pathUpdateTimer = 0;
         }
 
-        private bool CheckLineOfSight(PointF targetPosition)
-        {
-            PointF start = new PointF(Position.X + Size.Width / 2, Position.Y + Size.Height / 2);
-            PointF end = new PointF(targetPosition.X + _player.Size.Width / 2, targetPosition.Y + _player.Size.Height / 2);
-
-            float dx = end.X - start.X;
-            float dy = end.Y - start.Y;
-            float distance = (float)Math.Sqrt(dx * dx + dy * dy);
-
-            float nx = dx / distance;
-            float ny = dy / distance;
-
-            if (Math.Abs(ny) < 0.3f && Math.Abs(dx) > 30f)
-            {
-                int direction = nx > 0 ? 1 : -1; bool isGapAhead = IsGapBetweenPoints(start, end);
-
-                if (isGapAhead)
-                {
-                    Console.WriteLine("КРИТИЧЕСКАЯ ПРОВЕРКА: Обнаружена яма между врагом и игроком!");
-                    return false;
-                }
-            }
-
-            int steps = 30; for (int i = 1; i < steps; i++)
-            {
-                float t = i / (float)steps;
-                PointF checkPoint = new PointF(
-                    start.X + nx * distance * t,
-                    start.Y + ny * distance * t
-                );
-
-                RectangleF checkRect = new RectangleF(checkPoint.X - 1, checkPoint.Y - 1, 2, 2);
-
-                foreach (var platform in _gameManager.GetPlatforms())
-                {
-                    if (checkRect.IntersectsWith(platform.Bounds))
-                    {
-                        return false;
-                    }
-                }
-            }
-
-            return true;
-        }
-
-        private bool IsGapBetweenPoints(PointF start, PointF end)
-        {
-            int direction = start.X < end.X ? 1 : -1;
-            float distance = Math.Abs(end.X - start.X);
-            int steps = Math.Max(5, (int)(distance / 10));
-            float stepSize = distance / steps;
-            float currentX = start.X;
-
-            for (int i = 0; i <= steps; i++)
-            {
-                currentX += direction * stepSize;
-
-                if ((direction > 0 && currentX >= end.X) ||
-                    (direction < 0 && currentX <= end.X))
-                    break;
-
-                bool foundGround = false;
-
-                RectangleF groundCheck = new RectangleF(
-    currentX - 2,
-    Math.Min(start.Y, end.Y),
-    4,
-    Math.Abs(start.Y - end.Y) + 200
-);
-
-                foreach (var platform in _gameManager.GetPlatforms())
-                {
-                    if (groundCheck.IntersectsWith(platform.Bounds))
-                    {
-                        foundGround = true;
-                        break;
-                    }
-                }
-
-                if (!foundGround)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private bool MoveDirectlyTowardsPlayer()
-        {
-            if (_player == null) return false;
-
-            float horizontalDistance = Math.Abs(_player.Position.X - Position.X);
-            float verticalDistance = _player.Position.Y - Position.Y;
-
-            int targetDirection = _player.Position.X > Position.X ? 1 : -1;
-
-            if (IsOnGround() && !_needToJumpOverGap && !_isInJumpOverGapMode)
-            {
-                bool isGapInPath = CheckForGapAhead(targetDirection, out float gapWidth);
-                if (isGapInPath)
-                {
-                    _needToJumpOverGap = true;
-                    _jumpDistance = gapWidth;
-                    _preJumpTimer = PRE_JUMP_TIME;
-                    _movingRight = targetDirection > 0;
-                    VelocityX = _movingRight ? Math.Max(_speed, _minJumpSpeed) : Math.Min(-_speed, -_minJumpSpeed);
-                    Console.WriteLine($"ПРОВЕРКА В МЕТОДЕ ПРЯМОГО ДВИЖЕНИЯ: Обнаружена пропасть шириной {gapWidth}! Готовимся к прыжку.");
-                    return true;
-                }
-            }
-
-            PointF startPoint = new PointF(Position.X + Size.Width / 2, Position.Y + Size.Height / 2);
-            PointF endPoint = new PointF(_player.Position.X + _player.Size.Width / 2,
-                                        _player.Position.Y + _player.Size.Height / 2);
-            bool hasGapBetweenUs = IsGapBetweenPoints(startPoint, endPoint);
-
-            if (hasGapBetweenUs)
-            {
-                Console.WriteLine("БЛОКИРОВКА прямого движения - обнаружена яма между врагом и игроком");
-                return false;
-            }
-
-
-            if (verticalDistance < -30 && horizontalDistance < 150 && IsOnGround() && _jumpCooldown <= 0)
-            {
-                VelocityY = -10f; _jumpCooldown = JUMP_COOLDOWN_TIME;
-
-                if (_player.Position.X < Position.X)
-                {
-                    VelocityX = -_speed;
-                    _movingRight = false;
-                }
-                else
-                {
-                    VelocityX = _speed;
-                    _movingRight = true;
-                }
-
-                Console.WriteLine("Прыжок вверх к игроку!");
-                return true;
-            }
-
-            if (Math.Abs(verticalDistance) < 50 && CheckLineOfSight(_player.Position))
-            {
-                bool moveRight = _player.Position.X > Position.X + 5;
-                bool moveLeft = _player.Position.X < Position.X - 5;
-
-                if (moveLeft)
-                {
-                    VelocityX = -_speed;
-                    _movingRight = false;
-                    return true;
-                }
-                else if (moveRight)
-                {
-                    VelocityX = _speed;
-                    _movingRight = true;
-                    return true;
-                }
-
-                VelocityX = 0;
-                return true;
-            }
-
-            return false;
-        }
-
-        private bool ShouldJumpToReachPlayer()
-        {
-            if (_player == null || !IsOnGround() || _jumpCooldown > 0)
-                return false;
-
-            float yDifference = Position.Y - _player.Position.Y;
-            float xDistance = Math.Abs(Position.X - _player.Position.X);
-
-            float maxJumpableHeight = 150f;
-            if (yDifference > maxJumpableHeight)
-            {
-                return false;
-            }
-
-            return yDifference > 30 && xDistance < 150;
-        }
-
-        private static readonly Random _random = new Random();
+        #endregion
     }
+
 
     public class FlyingEnemy : Enemy
     {
