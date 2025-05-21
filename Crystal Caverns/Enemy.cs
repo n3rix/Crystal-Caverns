@@ -422,9 +422,6 @@ namespace Crystal_Caverns.Model
             if (_player == null || !IsOnGround() || _jumpCooldown > 0)
                 return false;
 
-            if (_jumpCooldown <= 0.1f && _jumpCooldown > 0)
-                return false;
-
             Platform currentPlatform = GetPlatformUnderEnemy();
             if (currentPlatform == null)
                 return false;
@@ -436,33 +433,188 @@ namespace Crystal_Caverns.Model
             float dx = _player.Position.X - Position.X;
             float dy = Position.Y - _player.Position.Y; float horizontalDist = Math.Abs(dx);
 
-            bool nearEdge = IsNearPlatformEdge(dx > 0);
-            if (!nearEdge)
+            if (horizontalDist > 100)
             {
-                if (horizontalDist < 250 && Math.Abs(dy) < 100)
-                {
-                    _movingRight = dx > 0;
-                    VelocityX = _movingRight ? _settings.ChaseSpeed : -_settings.ChaseSpeed;
-                }
+                Console.WriteLine("СЛИШКОМ ДАЛЕКО ДЛЯ ПРЯМОГО ПРЫЖКА!");
                 return false;
             }
 
-            Console.WriteLine($"Проверка прямого прыжка: dx={dx}, dy={dy}, dist={horizontalDist}, у края={nearEdge}");
-
-            bool canJump = horizontalDist < 250 && dy > -60 && dy < 150 && playerPlatform != null;
-            if (canJump)
+            if (dy < -20 || dy > 60)
             {
-                if (HasObstaclesInJumpPath(dx, dy))
-                {
-                    Console.WriteLine("ПРЕПЯТСТВИЕ НА ПУТИ ПРЫЖКА!");
-                    return false;
-                }
-
-                Console.WriteLine("РЕШЕНИЕ: ПРЫГАЕМ К ИГРОКУ НАПРЯМУЮ!");
-                return true;
+                Console.WriteLine("ВЫСОТА НЕ ПОДХОДИТ ДЛЯ ПРЫЖКА!");
+                return false;
             }
 
-            return false;
+            if (IsGapInJumpPath(Position.X, _player.Position.X, Position.Y, _player.Position.Y))
+            {
+                Console.WriteLine("НА ПУТИ ПРЫЖКА ЕСТЬ ЯМА - ИСПОЛЬЗУЕМ PATHFINDER!");
+                return false;
+            }
+
+            bool nearEdge = IsReallyNearPlatformEdge(dx > 0);
+            if (!nearEdge)
+            {
+                return false;
+            }
+
+            if (HasObstaclesInJumpPath(dx, dy))
+            {
+                Console.WriteLine("ПРЕПЯТСТВИЕ НА ПУТИ ПРЫЖКА!");
+                return false;
+            }
+
+            if (!IsPathReallySafe(dx, dy))
+            {
+                Console.WriteLine("ПУТЬ К ИГРОКУ НЕБЕЗОПАСЕН!");
+                return false;
+            }
+
+            Console.WriteLine("РЕШЕНИЕ: ПРЫГАЕМ К ИГРОКУ НАПРЯМУЮ!");
+            return true;
+        }
+
+        private bool IsReallyNearPlatformEdge(bool rightDirection)
+        {
+            float edgeCheckDistance = 5f;
+
+            RectangleF edgeCheck = new RectangleF(
+                Position.X + (rightDirection ? Size.Width : 0),
+                Position.Y + Size.Height + 1,
+                rightDirection ? edgeCheckDistance : -edgeCheckDistance,
+                5
+            );
+
+            bool foundGround = false;
+            foreach (var platform in _gameManager.GetPlatforms())
+            {
+                if (edgeCheck.IntersectsWith(platform.Bounds))
+                {
+                    foundGround = true;
+                    break;
+                }
+            }
+
+            return IsOnGround() && !foundGround;
+        }
+
+        private bool IsGapInJumpPath(float startX, float endX, float startY, float endY)
+        {
+            int direction = startX < endX ? 1 : -1;
+            float distance = Math.Abs(endX - startX);
+
+            int steps = Math.Max(10, (int)(distance / 10));
+
+            bool foundGap = false;
+
+            for (int i = 1; i < steps; i++)
+            {
+                float t = i / (float)steps;
+                float testX = startX + distance * t * direction;
+
+                bool hasGround = false;
+                for (float yOffset = 0; yOffset <= 120; yOffset += 20)
+                {
+                    if (CheckGroundAt(testX, Math.Max(startY, endY) + yOffset))
+                    {
+                        hasGround = true;
+                        break;
+                    }
+                }
+
+                if (!hasGround)
+                {
+                    foundGap = true;
+                    break;
+                }
+            }
+
+            return foundGap;
+        }
+
+        private float EstimateMaxGapWidth(int direction)
+        {
+            float startX = direction > 0 ? Position.X + Size.Width : Position.X;
+            float startY = Position.Y + Size.Height;
+
+            const float CHECK_STEP = 5f;
+            const float MAX_DISTANCE = 300f;
+
+            float maxGapWidth = 0;
+            float currentGapWidth = 0;
+            bool inGap = false;
+
+            for (float dist = 0; dist <= MAX_DISTANCE; dist += CHECK_STEP)
+            {
+                float testX = startX + dist * direction;
+
+                bool hasGround = CheckGroundAt(testX, startY + 5);
+
+                if (!hasGround && !inGap)
+                {
+                    inGap = true;
+                    currentGapWidth = 0;
+                }
+                else if (!hasGround && inGap)
+                {
+                    currentGapWidth += CHECK_STEP;
+                }
+                else if (hasGround && inGap)
+                {
+                    inGap = false;
+                    maxGapWidth = Math.Max(maxGapWidth, currentGapWidth);
+                }
+            }
+
+            if (inGap)
+            {
+                maxGapWidth = Math.Max(maxGapWidth, currentGapWidth);
+            }
+
+            return maxGapWidth;
+        }
+
+        private bool IsPathReallySafe(float dx, float dy)
+        {
+            float targetX = Position.X + dx;
+            float targetY = Position.Y - dy;
+
+            bool hasLandingPlatform = false;
+
+            for (float xOffset = -10; xOffset <= 10; xOffset += 5)
+            {
+                if (CheckGroundAt(targetX + xOffset, targetY + Size.Height + 2))
+                {
+                    hasLandingPlatform = true;
+                    break;
+                }
+            }
+
+            if (!hasLandingPlatform)
+            {
+                Console.WriteLine("НЕТ НАДЕЖНОЙ ПЛАТФОРМЫ ДЛЯ ПРИЗЕМЛЕНИЯ!");
+                return false;
+            }
+
+            float distFromEdge = 0;
+            int direction = dx > 0 ? 1 : -1;
+
+            for (float offset = 0; offset < 40; offset += 5)
+            {
+                float checkX = targetX + direction * offset;
+                if (!CheckGroundAt(checkX, targetY + Size.Height + 2))
+                {
+                    distFromEdge = offset;
+                    break;
+                }
+            }
+
+            if (distFromEdge < 15)
+            {
+                Console.WriteLine("МЕСТО ПРИЗЕМЛЕНИЯ СЛИШКОМ БЛИЗКО К КРАЮ!");
+                return false;
+            }
+
+            return true;
         }
 
         private bool IsNearPlatformEdge(bool rightDirection)
@@ -569,6 +721,25 @@ namespace Crystal_Caverns.Model
         private bool HasObstaclesInJumpPath(float dx, float dy)
         {
             int steps = 12;
+            float landingX = Position.X + dx;
+
+            bool hasSafeLanding = false;
+
+            for (float xOffset = -15; xOffset <= 15; xOffset += 5)
+            {
+                if (CheckGroundAt(landingX + xOffset, Position.Y - dy + Size.Height + 5))
+                {
+                    hasSafeLanding = true;
+                    break;
+                }
+            }
+
+            if (!hasSafeLanding)
+            {
+                Console.WriteLine("НЕТ БЕЗОПАСНОГО МЕСТА ПРИЗЕМЛЕНИЯ!");
+                return true;
+            }
+
             float jumpHeight = Math.Max(40, dy + 30);
             int direction = dx > 0 ? 1 : -1;
             float distance = Math.Abs(dx);
@@ -612,28 +783,45 @@ namespace Crystal_Caverns.Model
             return false;
         }
 
+        private bool CheckGroundAt(float x, float y)
+        {
+            RectangleF checkRect = new RectangleF(x - 5, y, 10, 5);
+
+            foreach (var platform in _gameManager.GetPlatforms())
+            {
+                if (checkRect.IntersectsWith(platform.Bounds))
+                    return true;
+            }
+
+            return false;
+        }
+
         private void DoDirectJumpToPlayer()
         {
             float dx = _player.Position.X - Position.X;
             float dy = Position.Y - _player.Position.Y;
             float horizontalDist = Math.Abs(dx);
 
-            float jumpStrength = _settings.JumpStrength * 1.0f;
+            float jumpStrength = _settings.JumpStrength;
 
-            if (horizontalDist > 120)
-                jumpStrength *= 1.15f;
-            else if (horizontalDist > 80)
-                jumpStrength *= 1.05f;
-            if (dy > 50)
-                jumpStrength *= 1.15f;
-            else if (dy > 20)
-                jumpStrength *= 1.1f;
-            float speedBoost = _settings.JumpSpeedBoost * 1.2f;
+            float speedBoost = _settings.JumpSpeedBoost;
 
-            if (horizontalDist > 100)
-                speedBoost *= 1.3f;
-            else if (horizontalDist > 70)
-                speedBoost *= 1.2f;
+            if (horizontalDist > 60)
+            {
+                jumpStrength *= 0.9f;
+                speedBoost *= 0.9f;
+            }
+
+            if (dy > 20)
+            {
+                jumpStrength *= 1.05f + (dy / 200f);
+            }
+
+            if (jumpStrength > _settings.JumpStrength * 1.2f)
+                jumpStrength = _settings.JumpStrength * 1.2f;
+
+            if (speedBoost > _settings.JumpSpeedBoost * 1.2f)
+                speedBoost = _settings.JumpSpeedBoost * 1.2f;
 
             VelocityY = -jumpStrength;
 
@@ -642,9 +830,74 @@ namespace Crystal_Caverns.Model
                 _settings.ChaseSpeed * speedBoost :
                 -_settings.ChaseSpeed * speedBoost;
 
-            _jumpCooldown = _settings.JumpCooldown;
+            _jumpCooldown = _settings.JumpCooldown * 1.5f;
 
             Console.WriteLine($"ПРЫЖОК К ИГРОКУ: сила={jumpStrength}, скорость={Math.Abs(VelocityX)}, дистанция={horizontalDist}");
+        }
+
+        private bool IsPathSafe(float dx, float dy)
+        {
+            float targetX = Position.X + dx;
+            float targetY = Position.Y - dy;
+
+            bool hasLandingPlatform = false;
+
+            for (float xOffset = -20; xOffset <= 20; xOffset += 10)
+            {
+                if (CheckGroundAt(targetX + xOffset, targetY + Size.Height + 5))
+                {
+                    hasLandingPlatform = true;
+                    break;
+                }
+            }
+
+            if (!hasLandingPlatform)
+            {
+                return false;
+            }
+
+            if (Math.Abs(dx) > 150)
+            {
+                float distance = Math.Abs(dx);
+                int direction = dx > 0 ? 1 : -1;
+
+                float jumpHeight = Math.Max(40, dy + 30);
+
+                for (float t = 0.3f; t <= 0.7f; t += 0.2f)
+                {
+                    float x = Position.X + dx * t;
+                    float y = Position.Y - jumpHeight * 4 * t * (1 - t);
+
+                    if (dy > 0)
+                    {
+                        y -= dy * t;
+                    }
+
+                    RectangleF checkRect = new RectangleF(x - Size.Width / 2, y - Size.Height / 2, Size.Width, Size.Height);
+
+                    foreach (var platform in _gameManager.GetPlatforms())
+                    {
+                        if (platform.Size.Height > 5 && checkRect.IntersectsWith(platform.Bounds))
+                        {
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private bool CanJumpGapWidth(float width)
+        {
+            float maxJumpDistance = _settings.ChaseSpeed * _settings.JumpSpeedBoost * 12f;
+
+            if (width > maxJumpDistance * 0.85f)
+            {
+                return false;
+            }
+
+            return width < maxJumpDistance;
         }
 
         private void UpdateChaseState(GameTime gameTime)
@@ -1149,7 +1402,31 @@ namespace Crystal_Caverns.Model
             return _gapWidth < maxJumpDistance;
         }
 
+        private void PrepareJump()
+        {
+            float jumpStrength = _settings.JumpStrength * 1.05f;
 
+            float speedBoost = _settings.JumpSpeedBoost * 1.2f;
+
+            if (_gapWidth > 150f)
+            {
+                jumpStrength *= 1.2f; speedBoost *= 1.3f;
+            }
+            else if (_gapWidth > 100f)
+            {
+                jumpStrength *= 1.1f; speedBoost *= 1.2f;
+            }
+            else if (_gapWidth > 50f)
+            {
+                jumpStrength *= 1.05f; speedBoost *= 1.1f;
+            }
+
+            VelocityX = _movingRight ? _settings.ChaseSpeed * speedBoost : -_settings.ChaseSpeed * speedBoost;
+            VelocityY = -jumpStrength;
+
+            _jumpCooldown = _settings.JumpCooldown;
+            Console.WriteLine($"Прыжок через пропасть шириной {_gapWidth}. Сила={jumpStrength}, Скорость={Math.Abs(VelocityX)}");
+        }
 
         private bool ShouldJumpToReachPlayer()
         {
