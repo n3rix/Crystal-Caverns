@@ -432,7 +432,11 @@ namespace Crystal_Caverns.Model
                 return false;
             float dx = _player.Position.X - Position.X;
             float dy = Position.Y - _player.Position.Y; float horizontalDist = Math.Abs(dx);
-
+            if (!IsAtCorrectEdgeForJump(dx > 0))
+            {
+                Console.WriteLine("ВРАГ НЕ У ПРАВИЛЬНОГО КРАЯ ПЛАТФОРМЫ ДЛЯ ПРЫЖКА!");
+                return false;
+            }
             if (horizontalDist > 100)
             {
                 Console.WriteLine("СЛИШКОМ ДАЛЕКО ДЛЯ ПРЯМОГО ПРЫЖКА!");
@@ -530,7 +534,24 @@ namespace Crystal_Caverns.Model
 
             return foundGap;
         }
+        private bool IsAtCorrectEdgeForJump(bool rightDirection)
+        {
+            Platform platform = GetPlatformUnderEnemy();
+            if (platform == null)
+                return false;
 
+            float platformLeftEdge = platform.Position.X;
+            float platformRightEdge = platform.Position.X + platform.Size.Width;
+
+            if (rightDirection)
+            {
+                return Math.Abs(Position.X + Size.Width - platformRightEdge) < 10;
+            }
+            else
+            {
+                return Math.Abs(Position.X - platformLeftEdge) < 10;
+            }
+        }
         private float EstimateMaxGapWidth(int direction)
         {
             float startX = direction > 0 ? Position.X + Size.Width : Position.X;
@@ -806,10 +827,15 @@ namespace Crystal_Caverns.Model
 
             float speedBoost = _settings.JumpSpeedBoost;
 
-            if (horizontalDist > 60)
+            if (horizontalDist < 60)
+            {
+                jumpStrength *= 0.85f;
+                speedBoost *= 0.9f;
+            }
+            else if (horizontalDist < 80)
             {
                 jumpStrength *= 0.9f;
-                speedBoost *= 0.9f;
+                speedBoost *= 0.95f;
             }
 
             if (dy > 20)
@@ -830,7 +856,6 @@ namespace Crystal_Caverns.Model
                 _settings.ChaseSpeed * speedBoost :
                 -_settings.ChaseSpeed * speedBoost;
 
-            _jumpCooldown = _settings.JumpCooldown * 1.5f;
 
             Console.WriteLine($"ПРЫЖОК К ИГРОКУ: сила={jumpStrength}, скорость={Math.Abs(VelocityX)}, дистанция={horizontalDist}");
         }
@@ -902,6 +927,7 @@ namespace Crystal_Caverns.Model
 
         private void UpdateChaseState(GameTime gameTime)
         {
+
             bool canSeePlayer = DetectPlayer();
 
             if (canSeePlayer)
@@ -920,6 +946,16 @@ namespace Crystal_Caverns.Model
 
             if (canSeePlayer && IsOnGround() && _jumpCooldown <= 0)
             {
+                float dx = _player.Position.X - Position.X;
+                bool shouldMoveRight = dx > 0;
+
+                if (!IsAtCorrectEdgeForJump(shouldMoveRight))
+                {
+                    _movingRight = shouldMoveRight;
+                    VelocityX = _movingRight ? _settings.ChaseSpeed : -_settings.ChaseSpeed;
+                    return;
+                }
+
                 if (CheckDirectJumpToPlayer())
                 {
                     DoDirectJumpToPlayer();
@@ -988,6 +1024,7 @@ namespace Crystal_Caverns.Model
 
         private void UpdateJumpState(GameTime gameTime)
         {
+
             if (IsOnGround() && VelocityY >= 0)
             {
                 ChangeState(EnemyState.Recovery);
@@ -1042,6 +1079,24 @@ namespace Crystal_Caverns.Model
                 }
 
                 target = _currentPath[_currentPathIndex];
+            }
+
+            if (Position.Y - target.Y > 20 && IsOnGround())
+            {
+                if (IsGapInJumpPath(Position.X, target.X, Position.Y, target.Y))
+                {
+                    if (target.X > Position.X + 5)
+                    {
+                        _movingRight = true;
+                        VelocityX = _settings.ChaseSpeed;
+                    }
+                    else if (target.X < Position.X - 5)
+                    {
+                        _movingRight = false;
+                        VelocityX = -_settings.ChaseSpeed;
+                    }
+                    return;
+                }
             }
 
             if (target.X > Position.X + 5)
@@ -1424,7 +1479,7 @@ namespace Crystal_Caverns.Model
             VelocityX = _movingRight ? _settings.ChaseSpeed * speedBoost : -_settings.ChaseSpeed * speedBoost;
             VelocityY = -jumpStrength;
 
-            _jumpCooldown = _settings.JumpCooldown;
+
             Console.WriteLine($"Прыжок через пропасть шириной {_gapWidth}. Сила={jumpStrength}, Скорость={Math.Abs(VelocityX)}");
         }
 
@@ -1436,7 +1491,24 @@ namespace Crystal_Caverns.Model
             float verticalDiff = Position.Y - _player.Position.Y;
             float horizontalDist = Math.Abs(_player.Position.X - Position.X);
 
-            return verticalDiff > 20 && horizontalDist < 150;
+            if (verticalDiff <= 20 || horizontalDist >= 120 || horizontalDist < 30)
+                return false;
+            Platform enemyPlatform = GetPlatformUnderEnemy();
+            Platform playerPlatform = GetPlatformUnderPlayer();
+            if (enemyPlatform == playerPlatform)
+                return false;
+            if (playerPlatform == null)
+                return false;
+            if (IsGapInJumpPath(Position.X, _player.Position.X, Position.Y, _player.Position.Y))
+                return false;
+            float dx = _player.Position.X - Position.X;
+            float dy = Position.Y - _player.Position.Y;
+            if (HasObstaclesInJumpPath(dx, dy))
+                return false;
+
+
+            Console.WriteLine("РЕШЕНИЕ: ПРЫГАЕМ ВВЕРХ К ИГРОКУ!");
+            return true;
         }
 
         private void Jump()
