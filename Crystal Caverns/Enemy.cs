@@ -250,8 +250,13 @@ namespace Crystal_Caverns.Model
         private float _jumpDistance = 0f;
         private float _minJumpSpeed = 5.0f;
 
-        private const float JUMP_FORCE_BASE = 8.0f; private const float JUMP_FORCE_MAX = 10.0f; private const float PRE_JUMP_ACCELERATION = 1.0f; private float _preJumpTimer = 0f; private const float PRE_JUMP_TIME = 0.2f;
-        private bool _isInJumpOverGapMode = false; private float _jumpBoostFactor = 1f;
+        private const float JUMP_FORCE_BASE = 10.0f;
+        private const float JUMP_FORCE_MAX = 12.0f;
+        private const float PRE_JUMP_ACCELERATION = 1.0f;
+        private float _preJumpTimer = 0f;
+        private const float PRE_JUMP_TIME = 0.2f;
+        private bool _isInJumpOverGapMode = false;
+        private float _jumpBoostFactor = 1f;
         private float _gapJumpTimer = 0f;
 
         private GameManager _gameManager;
@@ -311,20 +316,29 @@ namespace Crystal_Caverns.Model
                 {
                     float jumpForceBase = JUMP_FORCE_BASE;
                     float jumpForceExtra = 0;
+                    bool playerOnSameLevel = _player != null && Math.Abs(_player.Position.Y - Position.Y) < 50f;
 
                     if (_jumpDistance < 50f)
                     {
-                        jumpForceBase = JUMP_FORCE_BASE * 0.8f;
-                        _jumpBoostFactor = 1.8f;
+                        if (playerOnSameLevel)
+                        {
+                            jumpForceBase = JUMP_FORCE_BASE * 0.7f; _jumpBoostFactor = 1.5f; Console.WriteLine("Игрок рядом, делаем слабый прыжок через маленькую яму");
+                        }
+                        else
+                        {
+                            jumpForceBase = JUMP_FORCE_BASE * 0.9f;
+                            _jumpBoostFactor = 2f;
+                        }
                     }
                     else if (_jumpDistance < 100f)
                     {
-                        jumpForceBase = JUMP_FORCE_BASE * 1.0f;
-                        jumpForceExtra = (_jumpDistance - 50f) / 50f; _jumpBoostFactor = 2.0f;
+                        jumpForceBase = JUMP_FORCE_BASE * 1.1f;
+                        jumpForceExtra = (_jumpDistance - 50f) / 45;
+                        _jumpBoostFactor = 2.0f;
                     }
                     else
                     {
-                        jumpForceBase = JUMP_FORCE_BASE * 1.2f;
+                        jumpForceBase = JUMP_FORCE_BASE * 1.25f;
                         jumpForceExtra = (_jumpDistance - 100f) / 100f;
                         jumpForceExtra = Math.Min(jumpForceExtra, 1.0f);
                         _jumpBoostFactor = 2.2f + (jumpForceExtra * 0.5f);
@@ -384,98 +398,103 @@ namespace Crystal_Caverns.Model
                 if (_isChasing && _player != null)
                 {
                     bool directMovePossible = MoveDirectlyTowardsPlayer();
-                    if (ShouldJumpToReachPlayer() && _jumpCooldown <= 0 && IsOnGround())
+                    if (!_needToJumpOverGap && !directMovePossible)
                     {
-                        VelocityY = -10f;
-                        _jumpCooldown = JUMP_COOLDOWN_TIME;
+                        if (ShouldJumpToReachPlayer() && _jumpCooldown <= 0 && IsOnGround())
+                        {
+                            VelocityY = -12f;
+                            _jumpCooldown = JUMP_COOLDOWN_TIME;
 
-                        if (_player.Position.X < Position.X)
-                        {
-                            VelocityX = -_speed;
-                            _movingRight = false;
-                        }
-                        else
-                        {
-                            VelocityX = _speed;
-                            _movingRight = true;
-                        }
-
-                        Console.WriteLine("Прыжок вверх для достижения игрока на платформе выше!");
-                    }
-                    if (!directMovePossible)
-                    {
-                        if (_pathUpdateTimer <= 0)
-                        {
-                            _currentPath = _navigationGraph.FindPath(Position, _player.Position);
-                            _currentPathIndex = _currentPath.Count > 1 ? 1 : -1;
-                            _pathUpdateTimer = PATH_UPDATE_INTERVAL;
-                        }
-
-                        if (_preJumpTimer <= 0 && !_isInJumpOverGapMode)
-                        {
-                            if (IsOnGround() && !_needToJumpOverGap)
+                            if (_player.Position.X < Position.X)
                             {
-                                bool isGapAhead = CheckForGapAhead(_movingRight ? 1 : -1, out float gapWidth);
-                                if (isGapAhead)
-                                {
-                                    _needToJumpOverGap = true;
-                                    _jumpDistance = gapWidth;
-                                    _preJumpTimer = PRE_JUMP_TIME;
-                                    VelocityX = _movingRight ? Math.Max(_speed, _minJumpSpeed) : Math.Min(-_speed, -_minJumpSpeed);
-                                    Console.WriteLine($"Обнаружена пропасть шириной {gapWidth}! Готовимся к прыжку.");
-                                }
+                                VelocityX = -_speed;
+                                _movingRight = false;
                             }
                             else
                             {
-                                if (_currentPathIndex >= 0 && _currentPathIndex < _currentPath.Count)
+                                VelocityX = _speed;
+                                _movingRight = true;
+                            }
+
+                            Console.WriteLine("Прыжок вверх для достижения игрока на платформе выше!");
+                        }
+                        if (!directMovePossible)
+                        {
+                            if (_pathUpdateTimer <= 0)
+                            {
+                                _currentPath = _navigationGraph.FindPath(Position, _player.Position);
+                                _currentPathIndex = _currentPath.Count > 1 ? 1 : -1;
+                                _pathUpdateTimer = PATH_UPDATE_INTERVAL;
+                            }
+
+                            if (_preJumpTimer <= 0 && !_isInJumpOverGapMode)
+                            {
+                                if (IsOnGround() && !_needToJumpOverGap)
                                 {
-                                    PointF targetPoint = _currentPath[_currentPathIndex];
-
-                                    if (targetPoint.X < Position.X - 5)
+                                    bool isGapAhead = CheckForGapAhead(_movingRight ? 1 : -1, out float gapWidth);
+                                    if (isGapAhead)
                                     {
-                                        VelocityX = -_speed;
-                                        _movingRight = false;
-                                    }
-                                    else if (targetPoint.X > Position.X + 5)
-                                    {
-                                        VelocityX = _speed;
-                                        _movingRight = true;
-                                    }
-                                    else
-                                    {
-                                        VelocityX = 0;
-                                        _currentPathIndex++;
-                                        if (_currentPathIndex >= _currentPath.Count)
-                                            _currentPathIndex = -1;
-                                    }
-
-                                    if (targetPoint.Y < Position.Y - 10 && _jumpCooldown <= 0 && IsOnGround())
-                                    {
-                                        VelocityY = -8f; _jumpCooldown = JUMP_COOLDOWN_TIME;
-                                        Console.WriteLine("Прыжок вверх для достижения цели!");
+                                        _needToJumpOverGap = true;
+                                        _jumpDistance = gapWidth;
+                                        _preJumpTimer = PRE_JUMP_TIME;
+                                        VelocityX = _movingRight ? Math.Max(_speed, _minJumpSpeed) : Math.Min(-_speed, -_minJumpSpeed);
+                                        Console.WriteLine($"Обнаружена пропасть шириной {gapWidth}! Готовимся к прыжку.");
                                     }
                                 }
                                 else
                                 {
-                                    if (_player.Position.X < Position.X - 5)
+                                    if (_currentPathIndex >= 0 && _currentPathIndex < _currentPath.Count)
                                     {
-                                        VelocityX = -_speed;
-                                        _movingRight = false;
-                                    }
-                                    else if (_player.Position.X > Position.X + 5)
-                                    {
-                                        VelocityX = _speed;
-                                        _movingRight = true;
+                                        PointF targetPoint = _currentPath[_currentPathIndex];
+
+                                        if (targetPoint.X < Position.X - 5)
+                                        {
+                                            VelocityX = -_speed;
+                                            _movingRight = false;
+                                        }
+                                        else if (targetPoint.X > Position.X + 5)
+                                        {
+                                            VelocityX = _speed;
+                                            _movingRight = true;
+                                        }
+                                        else
+                                        {
+                                            VelocityX = 0;
+                                            _currentPathIndex++;
+                                            if (_currentPathIndex >= _currentPath.Count)
+                                                _currentPathIndex = -1;
+                                        }
+
+                                        if (targetPoint.Y < Position.Y - 10 && _jumpCooldown <= 0 && IsOnGround())
+                                        {
+                                            VelocityY = -10f;
+                                            _jumpCooldown = JUMP_COOLDOWN_TIME;
+                                            Console.WriteLine("Прыжок вверх для достижения цели!");
+                                        }
                                     }
                                     else
                                     {
-                                        VelocityX = 0;
+                                        if (_player.Position.X < Position.X - 5)
+                                        {
+                                            VelocityX = -_speed;
+                                            _movingRight = false;
+                                        }
+                                        else if (_player.Position.X > Position.X + 5)
+                                        {
+                                            VelocityX = _speed;
+                                            _movingRight = true;
+                                        }
+                                        else
+                                        {
+                                            VelocityX = 0;
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
+
                 else
                 {
                     if (!_isIdle && _preJumpTimer <= 0 && !_isInJumpOverGapMode)
@@ -498,7 +517,6 @@ namespace Crystal_Caverns.Model
                             {
                                 _movingRight = !_movingRight;
                                 _changeDirectionTimer = MIN_DIRECTION_CHANGE_TIME;
-                                Console.WriteLine("Пропасть слишком широкая! Разворот");
                             }
                         }
                         else if (_changeDirectionTimer <= 0 && _random.NextDouble() < 0.05)
@@ -536,11 +554,11 @@ namespace Crystal_Caverns.Model
 
                 if (VelocityY < -5f)
                 {
-                    gravityFactor = 0.6f;
+                    gravityFactor = 0.5f;
                 }
                 else if (VelocityY < 0)
                 {
-                    gravityFactor = 0.5f;
+                    gravityFactor = 0.4f;
                 }
                 else
                 {
@@ -557,6 +575,22 @@ namespace Crystal_Caverns.Model
             if (VelocityY > 10f)
             {
                 VelocityY = 10f;
+            }
+            if (IsOnGround() && !_needToJumpOverGap && !_isInJumpOverGapMode &&
+    _isChasing && Math.Abs(VelocityX) > 0.1f)
+            {
+                int currentDirection = VelocityX > 0 ? 1 : -1;
+                bool isGapInCurrentPath = CheckForGapAhead(currentDirection, out float gapWidth);
+
+                if (isGapInCurrentPath)
+                {
+                    _needToJumpOverGap = true;
+                    _jumpDistance = gapWidth;
+                    _preJumpTimer = PRE_JUMP_TIME;
+                    _movingRight = currentDirection > 0;
+                    VelocityX = _movingRight ? Math.Max(_speed, _minJumpSpeed) : Math.Min(-_speed, -_minJumpSpeed);
+                    Console.WriteLine($"ФИНАЛЬНАЯ ПРОВЕРКА: Обнаружена пропасть перед прыжком! Ширина: {gapWidth}");
+                }
             }
 
             Position = new PointF(Position.X + VelocityX, Position.Y + VelocityY);
@@ -644,11 +678,10 @@ enemyRect.Width + 10, 6);
             gapWidth = 0f;
             if (!IsOnGround()) return false;
 
-            float lookAheadDistance = 5f; float startX = direction > 0 ?
+            float lookAheadDistance = 2f; float startX = direction > 0 ?
     Position.X + Size.Width + lookAheadDistance :
     Position.X - lookAheadDistance;
             float startY = Position.Y + Size.Height;
-
             const float CHECK_STEP = 3f; const float MAX_GAP_CHECK_DISTANCE = 400f;
             const float VERTICAL_CHECK_DISTANCE = 150f;
             bool foundGap = false;
@@ -943,6 +976,23 @@ enemyRect.Width + 10, 6);
             float horizontalDistance = Math.Abs(_player.Position.X - Position.X);
             float verticalDistance = _player.Position.Y - Position.Y;
 
+            int targetDirection = _player.Position.X > Position.X ? 1 : -1;
+
+            if (IsOnGround() && !_needToJumpOverGap && !_isInJumpOverGapMode)
+            {
+                bool isGapInPath = CheckForGapAhead(targetDirection, out float gapWidth);
+                if (isGapInPath)
+                {
+                    _needToJumpOverGap = true;
+                    _jumpDistance = gapWidth;
+                    _preJumpTimer = PRE_JUMP_TIME;
+                    _movingRight = targetDirection > 0;
+                    VelocityX = _movingRight ? Math.Max(_speed, _minJumpSpeed) : Math.Min(-_speed, -_minJumpSpeed);
+                    Console.WriteLine($"ПРОВЕРКА В МЕТОДЕ ПРЯМОГО ДВИЖЕНИЯ: Обнаружена пропасть шириной {gapWidth}! Готовимся к прыжку.");
+                    return true;
+                }
+            }
+
             PointF startPoint = new PointF(Position.X + Size.Width / 2, Position.Y + Size.Height / 2);
             PointF endPoint = new PointF(_player.Position.X + _player.Size.Width / 2,
                                         _player.Position.Y + _player.Size.Height / 2);
@@ -953,6 +1003,7 @@ enemyRect.Width + 10, 6);
                 Console.WriteLine("БЛОКИРОВКА прямого движения - обнаружена яма между врагом и игроком");
                 return false;
             }
+
 
             if (verticalDistance < -30 && horizontalDistance < 150 && IsOnGround() && _jumpCooldown <= 0)
             {
