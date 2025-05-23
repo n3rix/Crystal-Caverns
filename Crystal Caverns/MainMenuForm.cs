@@ -14,7 +14,6 @@ namespace Crystal_Caverns.View
 
         private void SetupUI()
         {
-            // Настройка формы
             Text = "Crystal Caverns";
             Size = new Size(800, 600);
             FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -22,7 +21,6 @@ namespace Crystal_Caverns.View
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = Color.DarkBlue;
 
-            // Добавление заголовка
             Label titleLabel = new Label
             {
                 Text = "Crystal Caverns",
@@ -36,7 +34,6 @@ namespace Crystal_Caverns.View
             };
             Controls.Add(titleLabel);
 
-            // Кнопка Start Game
             Button startButton = new Button
             {
                 Text = "Start Game",
@@ -47,7 +44,6 @@ namespace Crystal_Caverns.View
             startButton.Click += StartButton_Click;
             Controls.Add(startButton);
 
-            // Кнопка Help
             Button helpButton = new Button
             {
                 Text = "Help",
@@ -58,7 +54,6 @@ namespace Crystal_Caverns.View
             helpButton.Click += HelpButton_Click;
             Controls.Add(helpButton);
 
-            // Кнопка Exit
             Button exitButton = new Button
             {
                 Text = "Exit",
@@ -72,16 +67,13 @@ namespace Crystal_Caverns.View
 
         private void StartButton_Click(object sender, EventArgs e)
         {
-            // Скрываем главное меню
             Hide();
 
-            // Создаем и показываем игровую форму
             using (var gameForm = new GameForm())
             {
                 gameForm.ShowDialog();
             }
 
-            // Показываем меню снова после закрытия игры
             Show();
         }
 

@@ -17,7 +17,6 @@ namespace Crystal_Caverns.Utils
 
         private float _smoothingFactor = 0.1f;
 
-        // Добавляем поля для динамических границ мира
         private float _minWorldY = float.MaxValue;
         private float _maxWorldY = float.MinValue;
         private float _minWorldX = float.MaxValue;
@@ -36,7 +35,6 @@ namespace Crystal_Caverns.Utils
             _target = target;
         }
 
-        // Метод для расчета реальных границ мира на основе объектов
         public void CalculateWorldBounds()
         {
             var gameManager = GameManager.Instance;
@@ -53,7 +51,6 @@ namespace Crystal_Caverns.Utils
             {
                 if (obj == null || !obj.IsActive) continue;
 
-                // Обновляем границы на основе позиции объектов
                 float objLeft = obj.Position.X;
                 float objRight = obj.Position.X + obj.Size.Width;
                 float objTop = obj.Position.Y;
@@ -65,14 +62,12 @@ namespace Crystal_Caverns.Utils
                 _maxWorldY = Math.Max(_maxWorldY, objBottom);
             }
 
-            // Добавляем буферную зону для удобства навигации
             const float buffer = 100f;
             _minWorldY -= buffer;
             _maxWorldY += buffer;
             _minWorldX -= buffer;
             _maxWorldX += buffer;
 
-            // Убеждаемся, что границы не меньше оригинального размера мира
             _minWorldX = Math.Min(_minWorldX, 0);
             _maxWorldX = Math.Max(_maxWorldX, WorldSize.Width);
             _minWorldY = Math.Min(_minWorldY, 0);
@@ -87,7 +82,6 @@ namespace Crystal_Caverns.Utils
         {
             if (_target == null) return;
 
-            // Пересчитываем границы мира, если они еще не рассчитаны
             if (!_boundsCalculated)
             {
                 CalculateWorldBounds();
@@ -101,7 +95,6 @@ namespace Crystal_Caverns.Utils
                 Position.Y + (_smoothingFactor * (targetY - Position.Y))
             );
 
-            // Используем динамические границы вместо статических
             float minCameraX = _minWorldX;
             float maxCameraX = _maxWorldX - ViewportSize.Width;
             float minCameraY = _minWorldY;
@@ -113,7 +106,6 @@ namespace Crystal_Caverns.Utils
             );
         }
 
-        // Метод для принудительного пересчета границ (можно вызывать при добавлении новых объектов)
         public void RecalculateBounds()
         {
             _boundsCalculated = false;
@@ -141,7 +133,6 @@ namespace Crystal_Caverns.Utils
             return viewRect.IntersectsWith(objectBounds);
         }
 
-        // Дополнительные методы для отладки
         public void PrintCameraInfo()
         {
             Console.WriteLine($"Позиция камеры: X={Position.X:F1}, Y={Position.Y:F1}");

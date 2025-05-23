@@ -43,15 +43,13 @@ namespace Crystal_Caverns.Model
 
         public override void Update(GameTime gameTime, Camera camera)
         {
-            // Рассчитываем направление и расстояние
             float targetX = _movingToEnd ? _endPosition.X : _startPosition.X;
             float targetY = _movingToEnd ? _endPosition.Y : _startPosition.Y;
             float dx = targetX - Position.X;
             float dy = targetY - Position.Y;
             float distance = (float)Math.Sqrt(dx * dx + dy * dy);
 
-            // Если мы рядом с целью, меняем направление
-            if (distance < 2.0f) // Минимальное расстояние для смены направления
+            if (distance < 2.0f)
             {
                 Position = new PointF(targetX, targetY);
                 _movingToEnd = !_movingToEnd;
@@ -60,11 +58,9 @@ namespace Crystal_Caverns.Model
             }
             else
             {
-                // Нормализуем вектор направления и умножаем на скорость
                 float velocityX = dx / distance * _speed;
                 float velocityY = dy / distance * _speed;
 
-                // Применяем движение с фиксированным шагом (не зависящим от deltaTime)
                 VelocityX = velocityX;
                 VelocityY = velocityY;
                 Position = new PointF(

@@ -8,20 +8,16 @@ namespace Crystal_Caverns.View
 {
     public partial class GameForm : Form
     {
-        // Контроллер игры
         private readonly GameController _controller;
 
-        // UI-элементы
         private Label _scoreLabel;
         private Label _livesLabel;
         private Label _crystalsLabel;
 
-        // Конструктор
         public GameForm()
         {
             InitializeComponent();
 
-            // Дополнительная настройка формы
             Size = new Size(800, 600);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
@@ -30,31 +26,23 @@ namespace Crystal_Caverns.View
             BackColor = Color.DarkSlateBlue;
             Text = "Crystal Caverns";
 
-            // Создаем контроллер
             _controller = new GameController();
 
-            // Добавляем обработчики событий для ввода
             KeyDown += GameForm_KeyDown;
             KeyUp += GameForm_KeyUp;
         }
 
-        // Обработчик события загрузки формы
         private void GameForm_Load(object sender, EventArgs e)
         {
-            // Создаем UI элементы
             CreateUI();
 
-            // Подписываемся на события GameManager
             SubscribeToEvents();
 
-            // Запускаем игру
             _controller.StartGame(this);
         }
 
-        // Создание UI элементов
         private void CreateUI()
         {
-            // Метка для отображения счета
             _scoreLabel = new Label
             {
                 Text = "Score: 0",
@@ -66,7 +54,6 @@ namespace Crystal_Caverns.View
             };
             Controls.Add(_scoreLabel);
 
-            // Метка для отображения жизней
             _livesLabel = new Label
             {
                 Text = "Lives: 3",
@@ -78,7 +65,6 @@ namespace Crystal_Caverns.View
             };
             Controls.Add(_livesLabel);
 
-            // Метка для отображения кристаллов
             _crystalsLabel = new Label
             {
                 Text = "Crystals: 0/0",
@@ -91,29 +77,22 @@ namespace Crystal_Caverns.View
             Controls.Add(_crystalsLabel);
         }
 
-        // Подписка на события GameManager
         private void SubscribeToEvents()
         {
             var gameManager = GameManager.Instance;
 
-            // Событие изменения состояния игры
             gameManager.GameStateChanged += GameManager_GameStateChanged;
 
-            // Событие изменения счета
             gameManager.ScoreChanged += GameManager_ScoreChanged;
 
-            // Событие изменения жизней
             gameManager.LivesChanged += GameManager_LivesChanged;
 
-            // Событие изменения количества кристаллов
             gameManager.CollectiblesChanged += GameManager_CollectiblesChanged;
         }
 
-        // Обработчики событий GameManager
 
         private void GameManager_GameStateChanged(object sender, GameStateEventArgs e)
         {
-            // Если игра завершена, показываем экран окончания
             if (e.IsOver)
             {
                 BeginInvoke(new Action(() =>
@@ -148,7 +127,6 @@ namespace Crystal_Caverns.View
             }));
         }
 
-        // Обработчики событий ввода
 
         private void GameForm_KeyDown(object sender, KeyEventArgs e)
         {
@@ -160,10 +138,8 @@ namespace Crystal_Caverns.View
             _controller.HandleKeyUp(e.KeyCode);
         }
 
-        // Показ экрана окончания игры
         private void ShowGameOverScreen(bool isVictory)
         {
-            // Создаем панель-оверлей
             Panel overlay = new Panel
             {
                 Size = ClientSize,
@@ -173,7 +149,6 @@ namespace Crystal_Caverns.View
             Controls.Add(overlay);
             overlay.BringToFront();
 
-            // Сообщение о результате
             Label messageLabel = new Label
             {
                 Text = isVictory ? "Level Complete!" : "Game Over",
@@ -187,7 +162,6 @@ namespace Crystal_Caverns.View
             };
             overlay.Controls.Add(messageLabel);
 
-            // Кнопка перезапуска
             Button restartButton = new Button
             {
                 Text = "Restart",
@@ -196,33 +170,26 @@ namespace Crystal_Caverns.View
             };
             restartButton.Click += (s, e) =>
             {
-                // Удаляем оверлей
                 Controls.Remove(overlay);
 
-                // Дополнительная пауза для гарантии, что все ресурсы освобождены
                 Application.DoEvents();
                 System.Threading.Thread.Sleep(50);
 
-                // Производим полный рестарт
                 _controller.RestartGame(this);
 
-                // Дополнительно устанавливаем фокус
                 Focus();
 
-                // Принудительное обновление состояния окна
                 Invalidate();
                 Update();
 
-                // Принудительное обновление фокуса с задержкой
                 BeginInvoke(new Action(() =>
-                {
-                    System.Threading.Thread.Sleep(100);
-                    Focus();
-                }));
+{
+    System.Threading.Thread.Sleep(100);
+    Focus();
+}));
             };
             overlay.Controls.Add(restartButton);
 
-            // Кнопка выхода в меню
             Button menuButton = new Button
             {
                 Text = "Main Menu",
@@ -236,29 +203,24 @@ namespace Crystal_Caverns.View
             overlay.Controls.Add(menuButton);
         }
 
-        // Освобождение ресурсов при закрытии формы
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             base.OnFormClosed(e);
 
-            // Отписываемся от событий
             var gameManager = GameManager.Instance;
             gameManager.GameStateChanged -= GameManager_GameStateChanged;
             gameManager.ScoreChanged -= GameManager_ScoreChanged;
             gameManager.LivesChanged -= GameManager_LivesChanged;
             gameManager.CollectiblesChanged -= GameManager_CollectiblesChanged;
 
-            // Освобождаем ресурсы контроллера
             _controller.Dispose();
         }
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
 
-            // Дополнительный сброс фокуса при показе формы
             Focus();
 
-            // Гарантия активации формы
             if (!this.Focused)
             {
                 this.Activate();

@@ -124,9 +124,9 @@ namespace Crystal_Caverns.Model
             _gameObjects.Add(_player);
             gameForm.Controls.Add(_player.Sprite);
 
-            CreatePlatform(50, 400, 300, 20, null, gameForm);
-            CreatePlatform(400, 450, 200, 20, null, gameForm);
-            CreatePlatform(650, 400, 250, 20, null, gameForm);
+            CreatePlatform(50, 400, 300, 20, platformSprite, gameForm);
+            CreatePlatform(400, 450, 200, 20, platformSprite, gameForm);
+            CreatePlatform(650, 400, 250, 20, platformSprite, gameForm);
 
             CreateCollectible(150, 370, 10, crystalSprite, gameForm);
             CreateCollectible(450, 420, 10, crystalSprite, gameForm);
@@ -144,7 +144,7 @@ namespace Crystal_Caverns.Model
                 float x = 950 + i * 200;
                 float y = 400 + (float)Math.Sin(i * 0.7) * 100;
 
-                CreatePlatform(x, y, 150, 20, null, gameForm);
+                CreatePlatform(x, y, 150, 20, platformSprite, gameForm);
 
                 if (i % 2 == 0)
                 {
@@ -167,7 +167,7 @@ namespace Crystal_Caverns.Model
                 float x = 300 + (float)Math.Sin(i * 0.8) * 400;
                 float y = 550 + i * 100;
 
-                CreatePlatform(x, y, 200, 20, null, gameForm);
+                CreatePlatform(x, y, 200, 20, platformSprite, gameForm);
 
                 CreateCollectible(x + 50, y - 30, 20, crystalSprite, gameForm);
                 CreateCollectible(x + 150, y - 30, 20, crystalSprite, gameForm);
@@ -183,7 +183,7 @@ namespace Crystal_Caverns.Model
                 float x = 50 + (i % 2) * 150;
                 float y = 350 - i * 80;
 
-                CreatePlatform(x, y, 120, 20, null, gameForm);
+                CreatePlatform(x, y, 120, 20, platformSprite, gameForm);
 
                 if (i % 2 == 0)
                 {
@@ -206,10 +206,10 @@ namespace Crystal_Caverns.Model
                 float x = 2400 + i * 150;
                 float y = 400 - i * 10;
 
-                CreatePlatform(x, y, 100, 20, null, gameForm);
+                CreatePlatform(x, y, 100, 20, platformSprite, gameForm);
             }
 
-            _exitDoor = new Door(2900, 330, null);
+            _exitDoor = new Door(2900, 330, doorClosedSprite);
             _gameObjects.Add(_exitDoor);
             gameForm.Controls.Add(_exitDoor.Sprite);
 
